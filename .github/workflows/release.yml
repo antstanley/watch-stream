@@ -47,26 +47,37 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --ignore-scripts
       # `changeset publish-plan` is the official answer to "what is ready to
-      # publish or tag?" - it respects whether the Version PR was merged, and it
-      # reports the dist-tag to use (prereleases included).
+      # publish or tag?" and reports the dist-tag to use, prereleases included.
+      # It cannot know about the registry, so this adds the two guards that
+      # matter: main sitting at the unreleased 0.0.0, and a version that is
+      # already published (a re-run, or a manual publish).
       - name: Read the plan
         id: plan
         run: |
           set -euo pipefail
-          pnpm exec changeset publish-plan --output "${RUNNER_TEMP}/plan.json" 2>&1 | tail -5
+          pnpm exec changeset publish-plan --output "${RUNNER_TEMP}/plan.json"
 
           ENTRY=$(jq -r '[.plan[][] | select(.kind == "publish")][0] // empty' "${RUNNER_TEMP}/plan.json")
+          VERSION=$(echo "${ENTRY:-{\"version\":\"\"}}" | jq -r '.version // ""')
+          DIST_TAG=$(echo "${ENTRY:-{\"tag\":\"latest\"}}" | jq -r '.tag // "latest"')
+          PUBLISH=false
+          REASON="nothing to publish from this commit"
+
           if [ -z "$ENTRY" ]; then
-            echo "Nothing to publish from this commit."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+            REASON="no changesets release pending"
+          elif [ "$VERSION" = "0.0.0" ]; then
+            REASON="main is still at 0.0.0 - the Version PR has not been merged"
+          elif npm view "watch-tail@${VERSION}" version >/dev/null 2>&1; then
+            REASON="watch-tail@${VERSION} is already on the registry"
           else
-            VERSION=$(echo "$ENTRY" | jq -r '.version')
-            DIST_TAG=$(echo "$ENTRY" | jq -r '.tag // "latest"')
-            echo "Ready to stage watch-tail@${VERSION} (dist-tag: ${DIST_TAG})"
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-            echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
+            PUBLISH=true
+            REASON="ready to stage watch-tail@${VERSION} (dist-tag: ${DIST_TAG})"
           fi
+
+          echo "${REASON}"
+          echo "publish=${PUBLISH}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
 
           {
             echo "## Changesets publish plan"
