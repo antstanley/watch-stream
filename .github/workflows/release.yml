@@ -1,0 +1,143 @@
+name: Release
+
+# Tag-driven, STAGED npm publishing.
+#
+# Pushing a tag like v0.1.0 validates that the tag matches package.json, stages
+# `watch-tail` to npm through OIDC trusted publishing, and opens a GitHub
+# Release. Staged packages are NOT live until they are approved out-of-band
+# (`npm stage approve` or the npmjs staged-packages UI), so the trusted
+# publisher can be restricted to stage-publish only. No npm token exists
+# anywhere in this workflow.
+#
+# Setup that must happen once, by hand, before the first release:
+#   npm trust github watch-tail --repo antstanley/watch-stream --file release.yml --allow-stage-publish
+#   npm access set mfa=publish watch-tail
+#   GitHub environment "publish" with a required reviewer
+# See RELEASING.md.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+      dist_tag: ${{ steps.extract.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Extract and validate the version
+        id: extract
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          PKG_VERSION=$(jq -r '.version' package.json)
+          if [ "$PKG_VERSION" != "$VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($VERSION)"
+            exit 1
+          fi
+          # npm publishes to `latest` unless told otherwise, prereleases included.
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE="${VERSION#*-}"
+            DIST_TAG="${PRERELEASE%%.*}"
+          else
+            DIST_TAG=latest
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
+          echo "Validated $VERSION (dist-tag: $DIST_TAG)"
+
+      - name: Preflight - is this version already published?
+        env:
+          VERSION: ${{ steps.extract.outputs.version }}
+        run: |
+          if npm view "watch-tail@${VERSION}" version >/dev/null 2>&1; then
+            echo "::error::watch-tail@${VERSION} is already on the registry"
+            exit 1
+          fi
+          echo "watch-tail@${VERSION} is not on the registry yet"
+
+  publish:
+    name: Stage to npm
+    needs: validate
+    runs-on: ubuntu-latest
+    # Only this job can mint an OIDC token, so build and test code never sees
+    # publish credentials. The environment adds a manual approval gate.
+    permissions:
+      id-token: write
+      contents: read
+    environment: publish
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Upgrade npm for the `npm stage` command
+        # Node 24's bundled npm has OIDC trusted publishing but predates staged
+        # publishing.
+        run: npm install -g npm@latest
+
+      # --ignore-scripts: no lifecycle script from any dependency runs here.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build
+      - run: pnpm check
+      - run: pnpm test:unit
+      - run: pnpm exec oxfmt --check .
+      - run: pnpm knip
+      - name: Validate package metadata (publint)
+        run: pnpm exec publint
+
+      - name: Stage the package
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          DIST_TAG: ${{ needs.validate.outputs.dist_tag }}
+        run: |
+          set -euo pipefail
+          pnpm pack --pack-destination "${RUNNER_TEMP}"
+          # Auth here is GitHub OIDC trusted publishing (id-token: write plus
+          # registry-url); --provenance attests the build to this commit.
+          npm stage publish --provenance --access public --ignore-scripts \
+            --tag "${DIST_TAG}" \
+            "${RUNNER_TEMP}/watch-tail-${VERSION}.tgz" | tee "${RUNNER_TEMP}/staged.log"
+
+      - name: Summarize what was staged
+        run: |
+          set -euo pipefail
+          {
+            echo "## Staged package"
+            echo
+            grep 'staged with id' "${RUNNER_TEMP}/staged.log" || echo "No staging id reported."
+            echo
+            echo 'Not live yet: approve with `npm stage approve` or the npmjs staged-packages UI.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    name: GitHub release
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --generate-notes \
+            --notes "Staged to npm by this workflow. Approve the staged package to make it live:
+          https://www.npmjs.com/settings/~/staged-packages"

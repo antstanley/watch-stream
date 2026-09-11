@@ -1,127 +1,91 @@
-# watch-stream
+<div align="center">
 
-Stream Amazon CloudWatch Logs into a local web app. Pick a region, pick a log group, watch the
-events arrive.
+# watch-tail
 
-- **Local UI** — SvelteKit + Svelte 5 + Tailwind, served on `http://localhost:5173`.
-- **Ambient credentials** — the server uses the AWS SDK default credential chain. Log in with the
-  AWS CLI or SSO beforehand; the app never stores or asks for keys.
-- **Server-sent events** — the browser gets a `text/event-stream` feed of log events.
-- **Readable log window** — long lines scroll sideways instead of wrapping (or toggle **Wrap**),
-  JSON entries are pretty-printed and coloured (toggle **JSON**), and both the group-list pane and
-  the timestamp/stream column are drag-resizable. Preferences stick in `localStorage`.
-- **floci-ready** — run the whole thing against the [floci](https://floci.io) local AWS emulator,
-  no AWS account needed.
+**Tail Amazon CloudWatch Logs in your browser.**
 
-```
-┌──────────────────────────────┬──────────────────────────────────────────────────────┐
-│ region  eu-west-1            │  ● live  1 204 events      [pause] [clear] [☑ scroll] │
-│ ──────────────────────────── │  filter: ______________________                       │
-│ ▸ /aws/lambda/checkout-api   │  12:03:41.221 9f2c1a4b  START RequestId: 8f2c…       │
-│ ▸ /aws/lambda/order-worker   │  12:03:41.229 9f2c1a4b  {"level":"info","msg":"cart… │
-│ ▸ /app/api/gateway           │  12:03:41.512 gateway-a WARN slow upstream /v1/cata… │
-│ ▾ /app/worker/queue          │  12:03:42.004 worker-0  ERROR job 71 failed: schema  │
-└──────────────────────────────┴──────────────────────────────────────────────────────┘
-```
+Pick a region, pick a log group, watch the events arrive - live, or over any
+historic window. Ambient AWS credentials only; your keys never leave the AWS SDK.
 
-## Requirements
+[![npm version](https://img.shields.io/npm/v/watch-tail?color=blue)](https://www.npmjs.com/package/watch-tail)
+[![CI](https://github.com/antstanley/watch-stream/actions/workflows/ci.yml/badge.svg)](https://github.com/antstanley/watch-stream/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/watch-tail)](./LICENSE)
+[![node](https://img.shields.io/node/v/watch-tail)](package.json)
 
-- Node.js 24+ (the seed scripts run `.ts` files through Node's type stripping)
-- pnpm 10+
-- Either ambient AWS credentials, or floci for a fully local run
+<img src="./docs/screenshot.png" alt="watch-tail streaming CloudWatch Logs" width="900">
 
-## Quick start with floci (no AWS account)
+</div>
 
 ```bash
-# 1. install and start the local AWS emulator
-curl -fsSL https://floci.io/install.sh | sh
-pnpm floci:up          # floci start + writes .env.local from `floci env`
-
-# 2. create sample log groups and backfill events
-pnpm seed              # add --watch to keep new events flowing
-
-# 3. run the app
-pnpm dev               # http://localhost:5173
+npx watch-tail                      # uses your ambient AWS credentials
+npx watch-tail --profile my-profile --region af-south-1
+npx watch-tail --floci              # or a local emulator, no AWS account
 ```
 
-`pnpm floci:up` writes `.env.local` with `AWS_ENDPOINT_URL`, dummy credentials, `AWS_REGION=us-east-1`
-and a region list. The server loads that file into `process.env` at startup (existing variables
-win), because the AWS SDK reads the process environment directly rather than SvelteKit's `$env`
-modules. `.env.local` is git-ignored; delete it to go back to real AWS. Verify the setup at any time
-with:
+## What you get
+
+- **Region-first UI** - the region picker lists log groups, and selecting one starts streaming.
+- **Live and historic** - follow new events, or scan 15 min / 1 h / 3 h / 12 h / 24 h / 5 days, or
+  any custom `from`/`to` window up to the 14 days CloudWatch Logs keeps.
+- **A log window built for real logs** - long lines scroll sideways (or wrap), JSON entries are
+  pretty-printed with syntax colouring, and both the stream-name column and the group-list pane
+  are drag-resizable. Stream names are truncated with the full value in a tooltip, so a
+  95-character Lambda stream name cannot push the message off screen.
+- **Server-sent events** - the browser gets a live `text/event-stream` feed, with client-side pause,
+  buffering, filtering, auto-scroll and a 5 000-line ring buffer.
+- **One command** - `watch-tail` builds nothing, needs no config file, and shuts down cleanly on
+  Ctrl+C.
+
+## Install
 
 ```bash
-pnpm floci:env -- --check
+npx watch-tail              # no install
+pnpm add -g watch-tail      # or install once
 ```
 
-Want a different region in the demo - `af-south-1`, say?
+Requires Node 22 or newer (developed and tested on Node 24).
 
-```bash
-pnpm seed -- --region af-south-1              # fixtures for the Cape Town region
-pnpm seed -- --region af-south-1 --watch      # and keep events flowing
-pnpm dev                                      # pick af-south-1 from the region list
+## CLI
+
+```
+watch-tail [options]
+
+  -p, --profile <name>   AWS profile to use (default: ambient credentials)
+  -r, --region <code>    Region to open on (default: profile region, else AWS_REGION)
+      --endpoint <url>   Point the app at a local emulator instead of AWS
+      --floci            Shorthand for --endpoint http://localhost:4566
+      --port <number>    Port for the local UI (default 4517)
+      --host <address>   Interface to bind (default 127.0.0.1, loopback only)
+      --no-open          Do not open a browser window
+      --print            Print the environment that would be used, then exit
+      --list             List the AWS profiles found on disk, then exit
+      --verbose          Log the server's own output
+  -h, --help             Show this help
+  -v, --version          Show the version
 ```
 
-The picker offers every region where CloudWatch Logs exists (33 regions, including `af-south-1`)
-unless you narrow it with `WATCH_STREAM_REGIONS`.
-
-**floci stores log data per region**, and `.env.local` pins `AWS_REGION=us-east-1`. `pnpm seed`
-writes to that same region, so the demo groups appear under `us-east-1`. Switch the picker to
-another region and the list is empty - that is the correct per-region behaviour, not a bug. To
-exercise the "no region configured" path instead, remove **both** the `AWS_REGION` and
-`AWS_DEFAULT_REGION` lines from `.env.local`; the app then uses your AWS profile's region (and floci
-shows nothing there until you seed that region).
-
-A local emulator never needs real credentials: if the endpoint is local and no credential variables
-are set at all, the server signs requests with floci's documented throwaway keys (`test`/`test`),
-`/api/health` reports `"credentials": "emulator-default"`, and the header shows a small `dev creds`
-hint next to the endpoint badge.
-
-## Using real AWS
-
-The app talks to whatever account your shell is logged into. It reads credentials through the SDK
-default provider chain and never stores them, so log in first.
+The CLI also ships shell completions, powered by [`@bomb.sh/tab`](https://bomb.sh):
 
 ```bash
-# 1. log in with the AWS CLI (SSO, IAM keys, or a profile)
+source <(watch-tail complete zsh)     # zsh; bash, fish and powershell too
+watch-tail complete zsh > ~/.watch-tail-completion.zsh
+```
+
+`--profile` sets `AWS_PROFILE` for the server process only. It never writes anything to disk, and it
+neutralizes any local emulator settings for that run, so a stray `.env.local` cannot redirect a real
+AWS run.
+
+## AWS access
+
+The app uses **ambient credentials**, resolved by the AWS SDK default provider chain - SSO, shared
+config, environment variables, or an instance role:
+
+```bash
 aws sso login --profile my-profile
-aws sts get-caller-identity --profile my-profile   # confirm it works
-
-# 2. start the app with that profile
-pnpm dev:aws --profile my-profile
-pnpm dev:aws --profile my-profile --region eu-west-1   # pick the region the UI opens on
-pnpm start:aws --profile my-profile                    # production build instead
+watch-tail --profile my-profile
 ```
 
-Launcher helpers:
-
-```bash
-pnpm dev:aws --list                              # profiles in ~/.aws/config and ~/.aws/credentials
-pnpm dev:aws --profile my-profile --print        # show the AWS_* environment it would use, start nothing
-pnpm dev:aws --profile my-profile --port 5199    # custom port
-```
-
-`--profile` sets `AWS_PROFILE` for the server process only and neutralizes any local emulator settings
-for that run, so you do **not** have to delete `.env.local`: `pnpm dev` keeps running against floci,
-while `pnpm dev:aws --profile …` talks to real AWS. Credentials are still resolved by the AWS SDK
-(SSO, keys, assume-role, instance role) - nothing is stored, and the flag changes no files.
-
-With `--profile`, the region comes from `--region`, then `AWS_REGION`/`AWS_DEFAULT_REGION` in your
-shell, then the profile's own `region` in `~/.aws/config`. A profile without a `region` and no
-`--region` makes the app answer with the `missing-region` message instead of guessing, and the
-launcher prints `no region found for profile "X"; pass --region <code> to set one.` on stderr.
-
-`--print` and `--list` write only data to stdout (one `KEY=value` or profile name per line) and exit
-0, so they can be scripted; warnings and notes go to stderr. Bad arguments exit 2 with usage.
-
-`AWS_ENDPOINT_URL` is what points the app at floci. With `.env.local` gone (or no
-`AWS_ENDPOINT_URL`/`AWS_ENDPOINT_URL_LOGS` exported) requests go to the real CloudWatch Logs API.
-Check the header badge: it shows **`floci http://…`** for a local endpoint and nothing for real AWS.
-`curl localhost:5173/api/health` confirms it too: `{ "endpoint": null, "local": false }`.
-
-### IAM permissions
-
-Two read-only actions are enough — the app never writes logs:
+Two read-only actions are enough; the app never writes logs:
 
 ```json
 {
@@ -136,194 +100,106 @@ Two read-only actions are enough — the app never writes logs:
 }
 ```
 
-Scope `Resource` down with a log-group ARN pattern (for example
-`arn:aws:logs:eu-west-1:123456789012:log-group:/aws/lambda/*`) if you only need a subset.
-`logs:DescribeLogGroups` is account-wide by nature, so `"Resource": "*"` is normal for it.
+Scope `Resource` down with a log-group ARN pattern if you only need a subset.
 
-### Account, region and profile
+**The region is optional.** Precedence is `--region`, then `AWS_REGION`/`AWS_DEFAULT_REGION`, then
+the profile's own region, then `[default]` in `~/.aws/config`. Nothing resolvable produces a clear
+`missing-region` message rather than a silent guess. Log groups, retention and events are per
+region, so a group in `eu-west-1` will not appear under `us-east-2`.
 
-- One credential set per server process. To switch account or profile, restart `pnpm dev` with a
-  different `AWS_PROFILE`; the browser does not choose credentials.
-- **You do not have to name a region.** Precedence is: the `region` query parameter, then
-  `AWS_REGION`/`AWS_DEFAULT_REGION`, then whatever your AWS config says (the active profile's
-  `region`, then `[default]`). So `AWS_PROFILE=my-profile pnpm dev` opens on that profile's region.
-  If nothing resolves, requests fail with a clear `missing-region` message.
-- The picker still lets you switch any time - it sends `?region=` on every request, no restart
-  needed. Use `WATCH_STREAM_REGIONS` to limit the list:
+### Local emulator
 
-  ```bash
-  WATCH_STREAM_REGIONS=eu-west-1,eu-west-2,us-east-1 pnpm dev
-  ```
-
-- Log groups, retention and events are all per region, so a group that exists in `eu-west-1` will
-  not appear when you select `us-east-2`.
-- The region shown in the header is the one actually used; when the server had to fall back because
-  nothing was resolvable, the picker still shows a starting point and the request reports
-  `missing-region`.
-- Cross-account access works the same way as the CLI: assume the role first
-  (`aws sso login`/`credential_process`) and start the app with that profile.
-
-### Switching back to floci
+[floci](https://floci.io) is a drop-in local AWS emulator on port 4566, which makes development
+fast and free:
 
 ```bash
-pnpm floci:up && pnpm seed     # restores .env.local and the demo fixtures
+curl -fsSL https://floci.io/install.sh | sh
+floci start
+npx watch-tail --floci             # throwaway credentials are supplied automatically
 ```
 
-Exporting `AWS_*` variables only overrides individual values: `.env.local` still wins for any
-variable you leave unset, so remove the file when you are done with the emulator.
+## Historic windows
 
-## The log window
+The **Live / Historic** toggle above the panes switches from following new events to scanning a
+fixed window. A historic scan ends on its own and the toolbar shows `window complete`; the window is
+shown in the URL, so any view is shareable:
 
-| Control                                 | Behaviour                                                                                                                                                                                                                                                                  |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Wrap** (default off)                  | Lines stay on one line and the window scrolls sideways; turn Wrap on to fold long lines instead                                                                                                                                                                            |
-| **JSON** (default on)                   | Entries whose message is entirely a JSON object/array are pretty-printed with syntax colouring; turn it off to see the raw line                                                                                                                                            |
-| Prefix handle                           | Drag the handle between the stream name and the message (or focus it and press Left/Right) to resize the timestamp + stream column. Stream names are truncated with the full value in the tooltip, so a 95-character Lambda stream name cannot push the message off screen |
-| Sidebar handle                          | Drag the handle between the group list and the log window (or focus it and press Left/Right) to resize the pane                                                                                                                                                            |
-| **Pause** / **Clear** / **Auto-scroll** | Freeze the view while buffering, empty the buffer, or follow the newest line                                                                                                                                                                                               |
+```
+http://127.0.0.1:4517/?region=af-south-1&group=/aws/lambda/checkout-api&mode=historic&range=24h
+```
 
-Widths and toggles persist per browser under `watch-stream:*` keys in `localStorage`. Only the raw
-message is used for filtering and level detection, so pretty-printing never hides a line.
+Windows older than 14 days are clamped (and marked `14-day limit`), huge scans stop after 10 000
+events, and switching back to **Live** restarts the tail.
 
-### Layout
-
-The shell fills the window: content is left-aligned with no centred max-width, and the two panes take
-all the space between the header and the bottom edge, at any window size. Long content scrolls inside
-its own pane - the group list and the log window each keep their own scrollbar - so the page itself
-never scrolls. Below 30 rem of height the layout keeps a minimum and the page scrolls instead of
-squashing the viewer.
-
-### Live and historic
-
-The **Live / Historic** toggle above the panes switches between following new events and scanning a
-fixed window:
-
-| Control            | Behaviour                                                                                                    |
-| ------------------ | ------------------------------------------------------------------------------------------------------------ |
-| **Live** (default) | Tails from now, exactly as before; the toolbar chip reads `live`                                             |
-| **Historic**       | Scans a fixed window and stops when it is done. Presets: 15 min, 1 hour, 3 hours, 12 hours, 24 hours, 5 days |
-| **Custom…**        | Opens two `datetime-local` fields; Apply accepts any window up to 14 days                                    |
-
-A historic scan ends on its own and the toolbar shows `window complete`. Ask for more than CloudWatch
-Logs keeps and the server clamps the start to the last 14 days, marking the chip `14-day limit`.
-Huge windows stop after 10 000 events, and switching back to **Live** restarts the tail.
-
-The view is shareable: the URL carries `mode=historic` plus either `range=24h` or `from`/`to` in epoch
-milliseconds, for example
-`/?region=af-south-1&group=/aws/lambda/checkout-api&mode=historic&range=24h`.
-
-## Configuration
-
-| Variable                            | Default                      | Purpose                                               |
-| ----------------------------------- | ---------------------------- | ----------------------------------------------------- |
-| `AWS_REGION` / `AWS_DEFAULT_REGION` | `us-east-1`                  | Default region                                        |
-| `AWS_ENDPOINT_URL_LOGS`             | –                            | CloudWatch Logs endpoint override (checked first)     |
-| `AWS_ENDPOINT_URL`                  | –                            | Endpoint override for all AWS calls; set by floci     |
-| `WATCH_STREAM_REGIONS`              | every CloudWatch Logs region | Narrow the picker, for example `eu-west-1,af-south-1` |
-| `WATCH_STREAM_LIMIT`                | `200`                        | Default page size for `describe-log-groups`           |
-
-Credentials are always ambient: `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`,
-`AWS_SESSION_TOKEN`, the shared credentials file, SSO, or an instance role. Copy `.env.example` to
-`.env.local` to set the non-secret values.
-
-## How streaming works
-
-CloudWatch Logs has no push API for reading a log group, so the server polls:
-
-1. `DescribeLogGroups` fills the group list for the selected region.
-2. `FilterLogEvents` is polled every second (configurable per request, 250 ms – 15 s) with a moving
-   `startTime` cursor. `startTime` is inclusive, so events are de-duplicated by CloudWatch event id
-   in a bounded seen-set (5 000 ids) before they leave the server.
-3. Each new batch is written to the SSE stream as an `log` event. `ping` events keep idle
-   connections alive; `error` events report upstream failures without dropping the stream.
-4. Transient failures back off exponentially (1 s → 15 s, up to 8 consecutive failures) and the
-   stream ends with an `end` event when the browser disconnects.
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the module map and the full HTTP/SSE contract.
-
-## Scripts
-
-| Command                             | What it does                                                            |
-| ----------------------------------- | ----------------------------------------------------------------------- |
-| `pnpm dev`                          | SvelteKit dev server on http://localhost:5173                           |
-| `pnpm build` / `pnpm start`         | Production build with adapter-node, then run it                         |
-| `pnpm dev:aws` / `pnpm start:aws`   | run against a real AWS profile (`--profile NAME`, `--region`, `--port`) |
-| `pnpm check`                        | `svelte-check` type check                                               |
-| `pnpm test`                         | vitest (unit + component projects)                                      |
-| `pnpm test:e2e`                     | integration tests against floci (`WATCH_STREAM_E2E=1` + `.env.local`)   |
-| `pnpm test:ui`                      | Playwright smoke check of the log window against a running app          |
-| `pnpm lint` / `pnpm lint:fix`       | oxlint                                                                  |
-| `pnpm format` / `pnpm format:check` | oxfmt                                                                   |
-| `pnpm knip`                         | unused files, exports and dependencies                                  |
-| `pnpm verify`                       | check + lint + format:check + test + knip + build                       |
-| `pnpm floci:up` / `pnpm floci:stop` | start/stop the emulator and write `.env.local`                          |
-| `pnpm floci:env -- --remove`        | delete `.env.local` to go back to real AWS                              |
-| `pnpm seed` / `pnpm seed:watch`     | fixtures for floci; `--watch` emits live traffic                        |
-
-Extra seed flags: `--endpoint URL`, `--region R`, `--interval MS`, `--backfill N`,
-`--backfill-minutes N`, `--reset`, `--allow-remote`.
-
-## Testing
+## Development
 
 ```bash
-pnpm test                                     # unit + component (no network)
-pnpm vitest run src/lib/server                # one area at a time
-pnpm floci:up && pnpm seed && pnpm test:e2e   # real stream through floci
+pnpm install
+pnpm dev                     # SvelteKit dev server on http://localhost:5173
+pnpm seed                    # fixtures in the local emulator (add --watch for live traffic)
+pnpm dev:aws --profile my-profile    # dev server against a real profile
+pnpm build                   # adapter-node build + the CLI in dist/
+pnpm start                   # run the built CLI
 ```
 
-| Project       | Files                            | Environment                               |
-| ------------- | -------------------------------- | ----------------------------------------- |
-| `server`      | `src/**/*.{test,spec}.ts`        | Node, fake SDK clients, no network        |
-| `client`      | `src/**/*.svelte.{test,spec}.ts` | jsdom + `@testing-library/svelte`         |
-| `integration` | `tests/**/*.{test,spec}.ts`      | Node, runs only with `WATCH_STREAM_E2E=1` |
+| Command                     | What it does                                                |
+| --------------------------- | ----------------------------------------------------------- |
+| `pnpm check`                | `svelte-check` types                                        |
+| `pnpm test:unit`            | vitest unit, component and integration projects             |
+| `pnpm test:e2e`             | floci integration suite (`WATCH_STREAM_E2E=1`)              |
+| `pnpm test:cli`             | the built CLI serves and stops cleanly (`WATCH_TAIL_E2E=1`) |
+| `pnpm test:ui`              | Playwright smoke check of the UI against a running app      |
+| `pnpm lint` / `pnpm format` | oxlint / oxfmt                                              |
+| `pnpm knip`                 | unused files, exports and dependencies                      |
+| `pnpm verify`               | all of the above plus the build                             |
+| `pnpm publish:check`        | publint plus the exact tarball contents                     |
 
-### Browser smoke check
-
-`pnpm test:ui` drives the app in a real headless browser (Playwright with the Google Chrome already
-on the machine, so nothing is downloaded) and checks what unit tests cannot: horizontal scrolling,
-the wrap and JSON toggles, and dragging both resizable columns. It needs a running app and only
-reads the page - it never writes to AWS.
+The browser smoke check reads the running UI and never writes to AWS:
 
 ```bash
-pnpm dev                       # or your own instance
-pnpm test:ui                   # http://localhost:5173, first log group in the list
-pnpm test:ui -- --url http://localhost:5196 --region us-east-1 --group /aws/lambda/checkout-api
-pnpm test:ui -- --screenshot /tmp/ui.png --timeout 20000 --channel chromium
+pnpm dev
+pnpm test:ui                                   # or -- --url http://127.0.0.1:4517 --channel chromium
 ```
 
-Each check prints `PASS`/`FAIL` with its evidence and the script exits non-zero on failure, so it
-works as a gate. The suite covers the log window (scrolling, wrapping, JSON, both resizers) and the
-live/historic toggle: presets appear, selecting one scopes the window, a 15-minute scan finishes on
-its own, and switching back to live restarts the tail. A group with no recent events reports `FAIL log lines rendered` - widen the
-lookback in the UI or pick another group.
+## Publishing
 
-The integration project reads `.env.local`, creates a throwaway log group
-(`/watch-stream/e2e-<timestamp>`), backfills events, tails them through the real SDK, reads the SSE
-route, and deletes the group afterwards. It needs a reachable emulator endpoint.
+Releases are **staged** to npm through GitHub OIDC trusted publishing: no tokens exist in the
+repository, and a human approves the staged package before it goes live. See
+[RELEASING.md](./RELEASING.md) for the one-time setup and the release flow. Changesets drive
+versioning:
 
-## Limitations
+```bash
+pnpm changeset
+```
 
-- Polling, not `StartLiveTail` — the subscription-filter API is not available on the emulator, and
-  polling keeps one code path for real AWS and floci. Expect ~1 s of latency and one API call per
-  second per open stream.
+## Architecture
+
+```
+Browser (SvelteKit client)
+  |  GET /api/log-groups        group list for a region
+  |  GET /api/stream            SSE: ready, log, ping, error, end
+  v
+SvelteKit server routes (Node)
+  |  @aws-sdk/client-cloudwatch-logs   DescribeLogGroups + FilterLogEvents polling
+  v
+CloudWatch Logs API   -- ambient AWS credentials
+  or floci on http://localhost:4566
+```
+
+The CLI (`src/cli/`) boots the packaged adapter-node server, waits for `/api/health`, and opens a
+browser. Full details, including the HTTP and SSE contract, are in
+[ARCHITECTURE.md](./ARCHITECTURE.md).
+
+## Notes and limits
+
+- CloudWatch Logs has no push API for reading, so the app polls `FilterLogEvents` (1 s by default,
+  250 ms - 15 s configurable). Expect roughly a second of latency and one API call per second per
+  open stream.
 - `FilterLogEvents` only returns events from the last 14 days.
-- Each open browser tab holds one polling stream. Close tabs you do not need.
-- The local server has no authentication: it inherits your AWS permissions and should only be bound
-  to localhost.
-
-## Troubleshooting
-
-| Symptom                                 | Fix                                                                                                                                  |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `missing-credentials` in the UI         | Log in first (`aws sso login`, `aws configure`) or export keys; with a local emulator the app falls back to throwaway keys by itself |
-| Region is not the one you expected      | Precedence is `?region=`, `AWS_REGION`/`AWS_DEFAULT_REGION`, then your AWS profile; `.env.local` pins `us-east-1` in local mode      |
-| `unreachable` errors                    | Is floci running? `floci status`, then `pnpm floci:up`                                                                               |
-| Empty group list                        | Wrong region, or no log groups there; run `pnpm seed` against floci                                                                  |
-| Stream connects but no events           | The group may have had no events in the lookback window; widen it with the lookback control                                          |
-| No stream names on log lines            | floci omits `logStreamName` in `FilterLogEvents`; real AWS returns it                                                                |
-| `AWS_PROFILE` set but expired           | The emulator fallback never overrides explicit config: run `aws sso login`, or unset `AWS_PROFILE` so the throwaway keys apply       |
-| `missing-region` for a real-AWS run     | Your profile has no `region` and none was passed: `pnpm dev:aws --profile X --region eu-west-1`                                      |
-| Stale `.env.local` after stopping floci | `rm .env.local` to fall back to real AWS                                                                                             |
+- The local server has no authentication: it binds to loopback and inherits your AWS permissions.
+  Binding elsewhere prints a warning - only do it on a trusted network.
+- floci omits `logStreamName` in `FilterLogEvents`, so the stream column stays empty locally;
+  real AWS fills it.
 
 ## License
 

@@ -1,15 +1,45 @@
 {
-	"name": "watch-stream",
-	"version": "0.0.1",
-	"private": true,
-	"description": "Tail Amazon CloudWatch Logs in a local web app",
+	"name": "watch-tail",
+	"version": "0.1.0",
+	"description": "Tail Amazon CloudWatch Logs in your browser: a local SvelteKit UI with live and historic streaming, ambient AWS credentials and floci support",
+	"keywords": [
+		"aws",
+		"cli",
+		"cloudwatch",
+		"cloudwatch-logs",
+		"floci",
+		"localstack",
+		"log-viewer",
+		"logs",
+		"sveltekit",
+		"tail",
+		"tailwindcss"
+	],
+	"homepage": "https://github.com/antstanley/watch-stream#readme",
+	"bugs": "https://github.com/antstanley/watch-stream/issues",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/antstanley/watch-stream.git"
+	},
+	"bin": {
+		"watch-tail": "./dist/cli/bin.js"
+	},
+	"files": [
+		"dist",
+		"build",
+		"README.md",
+		"LICENSE"
+	],
 	"type": "module",
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "vite build && tsc -p tsconfig.cli.json",
 		"preview": "vite preview",
-		"start": "node build/index.js",
+		"start": "node dist/cli/bin.js",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -31,12 +61,25 @@
 		"test:e2e": "WATCH_STREAM_E2E=1 vitest run --project integration",
 		"dev:aws": "node scripts/dev.ts",
 		"start:aws": "node scripts/dev.ts --start",
-		"test:ui": "node scripts/ui-smoke.ts"
+		"test:ui": "node scripts/ui-smoke.ts",
+		"build:app": "vite build",
+		"build:cli": "tsc -p tsconfig.cli.json",
+		"prepack": "pnpm build",
+		"watch-tail": "node dist/cli/bin.js",
+		"publish:check": "publint && npm pack --dry-run",
+		"test:cli": "WATCH_TAIL_E2E=1 vitest run --project integration tests/cli-server.spec.ts",
+		"changeset": "changeset",
+		"changeset:version": "changeset version && pnpm install --no-frozen-lockfile"
 	},
 	"dependencies": {
-		"@aws-sdk/client-cloudwatch-logs": "^3.1129.0"
+		"@aws-sdk/client-cloudwatch-logs": "^3.1129.0",
+		"@bomb.sh/args": "^0.3.1",
+		"@bomb.sh/tab": "^0.0.22",
+		"@clack/prompts": "^1.8.0"
 	},
 	"devDependencies": {
+		"@changesets/changelog-github": "^1.0.1",
+		"@changesets/cli": "^3.0.2",
 		"@sveltejs/adapter-node": "^5.5.4",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
@@ -48,11 +91,16 @@
 		"oxfmt": "^0.67.0",
 		"oxlint": "^1.82.0",
 		"playwright": "^1.63.0",
+		"publint": "^0.3.24",
 		"svelte": "^5.56.1",
 		"svelte-check": "^4.6.0",
 		"tailwindcss": "^4.3.0",
 		"typescript": "^6.0.3",
 		"vite": "^8.0.16",
 		"vitest": "^4.1.8"
-	}
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"packageManager": "pnpm@11.24.0"
 }
