@@ -1,75 +1,111 @@
 name: Release
 
-# Tag-driven, STAGED npm publishing.
+# Changesets (https://github.com/changesets/changesets) drive this end to end.
 #
-# Pushing a tag like v0.1.0 validates that the tag matches package.json, stages
-# `watch-tail` to npm through OIDC trusted publishing, and opens a GitHub
-# Release. Staged packages are NOT live until they are approved out-of-band
-# (`npm stage approve` or the npmjs staged-packages UI), so the trusted
-# publisher can be restricted to stage-publish only. No npm token exists
-# anywhere in this workflow.
+#   push to main with pending changesets  ->  the Version PR is created/updated
+#                                             (see version-pr.yml)
+#   merge the Version PR                  ->  this workflow stages that version
 #
-# Setup that must happen once, by hand, before the first release:
-#   npm trust github watch-tail --repo antstanley/watch-stream --file release.yml --allow-stage-publish
-#   npm access set mfa=publish watch-tail
-#   GitHub environment "publish" with a required reviewer
-# See RELEASING.md.
+# Staging means the tarball lands in npm's staging area and is NOT live until a
+# human approves it (`npm stage approve`, or the npmjs staged-packages UI). The
+# trusted publisher is therefore restricted to stage-publish only, and no npm
+# token exists anywhere: authentication is GitHub OIDC, and only the publish job
+# can mint one.
+#
+# One-time setup lives in RELEASING.md.
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [main]
+    paths:
+      - 'package.json'
+      - 'CHANGELOG.md'
+      - '.changeset/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+concurrency: release-${{ github.ref }}
 
 permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Validate version
+  plan:
+    name: Read the changesets publish plan
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.extract.outputs.version }}
-      dist_tag: ${{ steps.extract.outputs.dist_tag }}
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      dist_tag: ${{ steps.plan.outputs.dist_tag }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Extract and validate the version
-        id: extract
-        env:
-          REF_NAME: ${{ github.ref_name }}
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      # `changeset publish-plan` is the official answer to "what is ready to
+      # publish or tag?" - it respects whether the Version PR was merged, and it
+      # reports the dist-tag to use (prereleases included).
+      - name: Read the plan
+        id: plan
         run: |
           set -euo pipefail
-          VERSION="${REF_NAME#v}"
-          PKG_VERSION=$(jq -r '.version' package.json)
-          if [ "$PKG_VERSION" != "$VERSION" ]; then
-            echo "::error::package.json version ($PKG_VERSION) does not match tag ($VERSION)"
-            exit 1
-          fi
-          # npm publishes to `latest` unless told otherwise, prereleases included.
-          if [[ "$VERSION" == *-* ]]; then
-            PRERELEASE="${VERSION#*-}"
-            DIST_TAG="${PRERELEASE%%.*}"
-          else
-            DIST_TAG=latest
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
-          echo "Validated $VERSION (dist-tag: $DIST_TAG)"
+          pnpm exec changeset publish-plan --output "${RUNNER_TEMP}/plan.json" 2>&1 | tail -5
 
-      - name: Preflight - is this version already published?
-        env:
-          VERSION: ${{ steps.extract.outputs.version }}
-        run: |
-          if npm view "watch-tail@${VERSION}" version >/dev/null 2>&1; then
-            echo "::error::watch-tail@${VERSION} is already on the registry"
-            exit 1
+          ENTRY=$(jq -r '[.plan[][] | select(.kind == "publish")][0] // empty' "${RUNNER_TEMP}/plan.json")
+          if [ -z "$ENTRY" ]; then
+            echo "Nothing to publish from this commit."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            VERSION=$(echo "$ENTRY" | jq -r '.version')
+            DIST_TAG=$(echo "$ENTRY" | jq -r '.tag // "latest"')
+            echo "Ready to stage watch-tail@${VERSION} (dist-tag: ${DIST_TAG})"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
           fi
-          echo "watch-tail@${VERSION} is not on the registry yet"
+
+          {
+            echo "## Changesets publish plan"
+            echo
+            jq -r '.plan[] | map("- \(.kind) \(.name)@\(.version) (tag: \(.tag // "latest"))") | .[]' "${RUNNER_TEMP}/plan.json" 2>/dev/null || echo "- (empty)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify the released commit
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build
+      - run: pnpm check
+      - run: pnpm test:unit
+      - run: pnpm lint
+      - run: pnpm exec oxfmt --check .
+      - run: pnpm knip
+      # Metadata is validated before the publish job, which never builds or
+      # tests: publishing runs nobody's code, and nobody's code runs with the
+      # OIDC token.
+      - name: Validate package metadata (publint)
+        run: pnpm exec publint
 
   publish:
     name: Stage to npm
-    needs: validate
+    needs: [plan, verify]
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
-    # Only this job can mint an OIDC token, so build and test code never sees
-    # publish credentials. The environment adds a manual approval gate.
     permissions:
       id-token: write
       contents: read
@@ -85,34 +121,32 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - name: Upgrade npm for the `npm stage` command
-        # Node 24's bundled npm has OIDC trusted publishing but predates staged
+        # Node 24's bundled npm does OIDC trusted publishing but predates staged
         # publishing.
         run: npm install -g npm@latest
-
-      # --ignore-scripts: no lifecycle script from any dependency runs here.
       - run: pnpm install --frozen-lockfile --ignore-scripts
-      - run: pnpm build
-      - run: pnpm check
-      - run: pnpm test:unit
-      - run: pnpm exec oxfmt --check .
-      - run: pnpm knip
-      - name: Validate package metadata (publint)
-        run: pnpm exec publint
-
-      - name: Stage the package
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-          DIST_TAG: ${{ needs.validate.outputs.dist_tag }}
+      - name: Pack from the changesets plan
+        # `changeset pack` reads the same plan and runs each package's `prepack`
+        # (which builds the app and the CLI into the tarball).
         run: |
           set -euo pipefail
-          pnpm pack --pack-destination "${RUNNER_TEMP}"
-          # Auth here is GitHub OIDC trusted publishing (id-token: write plus
+          pnpm exec changeset publish-plan --output "${RUNNER_TEMP}/plan.json"
+          pnpm exec changeset pack --from-publish-plan "${RUNNER_TEMP}/plan.json" \
+            --out-dir "${RUNNER_TEMP}/packed"
+          find "${RUNNER_TEMP}/packed" -name '*.tgz' -print
+      - name: Stage
+        env:
+          DIST_TAG: ${{ needs.plan.outputs.dist_tag }}
+        run: |
+          set -euo pipefail
+          # Auth is GitHub OIDC trusted publishing (id-token: write plus
           # registry-url); --provenance attests the build to this commit.
-          npm stage publish --provenance --access public --ignore-scripts \
-            --tag "${DIST_TAG}" \
-            "${RUNNER_TEMP}/watch-tail-${VERSION}.tgz" | tee "${RUNNER_TEMP}/staged.log"
-
-      - name: Summarize what was staged
+          for tarball in $(find "${RUNNER_TEMP}/packed" -name '*.tgz'); do
+            echo "Staging ${tarball}"
+            npm stage publish --provenance --access public --ignore-scripts \
+              --tag "${DIST_TAG}" "${tarball}" 2>&1 | tee -a "${RUNNER_TEMP}/staged.log"
+          done
+      - name: Summarise
         run: |
           set -euo pipefail
           {
@@ -123,21 +157,37 @@ jobs:
             echo 'Not live yet: approve with `npm stage approve` or the npmjs staged-packages UI.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  github-release:
-    name: GitHub release
-    needs: [validate, publish]
+  tag:
+    name: Tag the release
+    needs: [plan, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Create the release
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Create the tag and GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.validate.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
+          set -euo pipefail
+          # `changeset git-tag` writes the canonical tag for the current version
+          # (v0.1.0 for a single package), so the tag always matches what was
+          # staged.
+          pnpm exec changeset git-tag
+          git push origin "v${VERSION}"
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --generate-notes \
-            --notes "Staged to npm by this workflow. Approve the staged package to make it live:
+            --notes "Staged to npm by the release workflow. Approve the staged package to make it live:
           https://www.npmjs.com/settings/~/staged-packages"
