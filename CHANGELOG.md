@@ -1,5 +1,20 @@
 # watch-tail
 
+## 0.3.0
+
+### Minor Changes
+
+- [#5](https://github.com/antstanley/watch-stream/pull/5) [`3fa9cf0`](https://github.com/antstanley/watch-stream/commit/3fa9cf06335dea11cd936fe317f18f703e408393) Thanks [@antstanley](https://github.com/antstanley)! - Detect unusable AWS credentials at startup, and offer the login that fixes them.
+
+  The CLI now asks the running app for one log group before opening the browser. If
+  AWS refuses because of credentials, it reads how the profile is configured and
+  offers the matching command: `aws sso login --profile X` for SSO profiles,
+  `aws login --profile X` for console sign-in profiles (or one with nothing
+  configured yet), and no login at all for static keys or a `credential_process`,
+  where the fix is elsewhere. The login runs with the terminal attached, so the
+  browser flow works; `--remote` is added on headless hosts. Decline, and it prints
+  the command instead and leaves the app running. Emulator runs skip the check.
+
 ## 0.2.1
 
 ### Patch Changes
