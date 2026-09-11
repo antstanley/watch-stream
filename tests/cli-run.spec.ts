@@ -47,7 +47,9 @@ function harness(overrides: Partial<CliIo> = {}): Harness {
 	const io: Partial<CliIo> = {
 		stdout: (line) => out.push(line),
 		stderr: (line) => err.push(line),
-		env: { PATH: '/usr/bin', AWS_CONFIG_FILE: '/nonexistent/config' },
+		// Explicit, so the advice does not depend on the CI platform (Linux has no
+		// DISPLAY, which would add --remote).
+		env: { PATH: '/usr/bin', AWS_CONFIG_FILE: '/nonexistent/config', WATCH_TAIL_HEADLESS: '0' },
 		interactive: false,
 		readProfiles: () => ['default', 'acme-prod'],
 		readConfigText: () => '[profile acme-prod]\nregion = eu-west-1\n',
@@ -279,6 +281,16 @@ describe('run: credential preflight', () => {
 
 		expect(h.ui.asked).toEqual([]);
 		expect(h.ui.lines.join('\n')).toContain('could not list log groups');
+	});
+
+	it('adds --remote when there is no browser', async () => {
+		const base = harness();
+		const h = credentialHarness({ probeResults: [failure], answers: [true] });
+		h.io.env = { ...base.io.env, WATCH_TAIL_HEADLESS: '1' };
+
+		expect(await run(['--profile', 'acme-prod', '--no-open'], h.io)).toBe(0);
+
+		expect(h.logins).toEqual([['sso', 'login', '--profile', 'acme-prod', '--remote']]);
 	});
 
 	it('skips the check entirely for an emulator endpoint', async () => {

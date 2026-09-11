@@ -71,9 +71,16 @@ export function runLogin(
 	});
 }
 
-/** True when there is no browser to drive the login (SSH, headless). */
+/**
+ * True when there is no browser to drive the login (SSH, headless).
+ *
+ * `WATCH_TAIL_HEADLESS` overrides the guess in both directions: `1` forces the
+ * `--remote` flow, `0` forces the browser flow on a host that looks headless
+ * (a Linux container with a browser proxy, for example).
+ */
 export function isHeadless(env: NodeJS.ProcessEnv = process.env): boolean {
 	if (env.WATCH_TAIL_HEADLESS === '1') return true;
+	if (env.WATCH_TAIL_HEADLESS === '0') return false;
 	if (env.SSH_CONNECTION !== undefined && env.SSH_CONNECTION !== '') return true;
 	if (process.platform === 'linux' && env.DISPLAY === undefined) return true;
 	return false;
