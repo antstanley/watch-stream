@@ -1,5 +1,17 @@
 # watch-tail
 
+## 0.2.1
+
+### Patch Changes
+
+- [#3](https://github.com/antstanley/watch-stream/pull/3) [`5916b69`](https://github.com/antstanley/watch-stream/commit/5916b694c9574c55f656ea35804463a4305c0331) Thanks [@antstanley](https://github.com/antstanley)! - Make shell completions complete the values that matter.
+
+  `--profile` now offers the profiles from your own AWS config instead of just
+  `default`, `--region` offers the CloudWatch Logs region list, `--open` is
+  completable, and the stray `presets` pseudo-command is gone. The completion
+  protocol is covered by tests, including a generated script for each supported
+  shell.
+
 ## 0.2.0
 
 ### Minor Changes
