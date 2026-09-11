@@ -100,3 +100,12 @@ export type StreamEndPayload = {
 };
 
 export type StreamState = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'error' | 'ended';
+
+/** Answer of `GET /api/identity` - who the resolved credentials belong to. */
+export type IdentityResponse = {
+	arn: string;
+	account: string;
+	userId: string;
+	region: string;
+	endpoint: string | null;
+};

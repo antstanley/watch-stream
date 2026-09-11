@@ -81,6 +81,21 @@ partition that publishes a CloudWatch Logs endpoint (derived from the AWS CLI's
 `botocore/data/endpoints.json`), including `af-south-1`. China, GovCloud and the ISO partitions are
 excluded; set `WATCH_STREAM_REGIONS` to override the list entirely.
 
+### `GET /api/identity?region=<region>`
+
+Calls `sts:GetCallerIdentity` with the same resolved configuration, so a 200 means the ambient
+credentials work at all and the ARN says whose they are. The CLI uses it before offering any login.
+
+```json
+{
+	"arn": "arn:aws:sts::111111111111:assumed-role/Administrator/me",
+	"account": "111111111111",
+	"userId": "AROAEXAMPLE:me",
+	"region": "af-south-1",
+	"endpoint": null
+}
+```
+
 ### `GET /api/log-groups?region=<region>&prefix=<prefix>&limit=<n>`
 
 `region` is optional: without it the request uses the server's effective region (see

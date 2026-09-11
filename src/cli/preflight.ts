@@ -8,7 +8,7 @@
  * login command repairs it, and the CLI can run it and retry.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import type { ApiErrorBody } from '../lib/types.ts';
+import type { ApiErrorBody, IdentityResponse } from '../lib/types.ts';
 
 export type CredentialProbe =
 	| { ok: true }
@@ -84,4 +84,55 @@ export function isHeadless(env: NodeJS.ProcessEnv = process.env): boolean {
 	if (env.SSH_CONNECTION !== undefined && env.SSH_CONNECTION !== '') return true;
 	if (process.platform === 'linux' && env.DISPLAY === undefined) return true;
 	return false;
+}
+
+/** Result of asking the app who the current credentials belong to. */
+export type IdentityProbe =
+	| { ok: true; identity: IdentityResponse }
+	| { ok: false; code?: string; message: string };
+
+/**
+ * Asks the app to call `sts:GetCallerIdentity`.
+ *
+ * This is the cheapest way to answer "do these credentials work at all?", and it
+ * is what tells the CLI not to offer a login for a profile that is already fine.
+ */
+export async function readIdentity(input: {
+	baseUrl: string;
+	region: string | null;
+	fetchImpl?: typeof fetch;
+	timeoutMs?: number;
+}): Promise<IdentityProbe> {
+	const { baseUrl, region, fetchImpl = fetch, timeoutMs = 15_000 } = input;
+	const url = new URL('/api/identity', baseUrl);
+	if (region !== null && region !== '') url.searchParams.set('region', region);
+
+	try {
+		const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+		if (response.ok) {
+			return { ok: true, identity: (await response.json()) as IdentityResponse };
+		}
+		const body = (await response.json().catch(() => null)) as ApiErrorBody | null;
+		return { ok: false, code: body?.code, message: body?.error ?? `HTTP ${response.status}` };
+	} catch (error) {
+		return { ok: false, message: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+/**
+ * Short label for an ARN, for messages.
+ *
+ * Role ARNs end with the session name and not the role
+ * (`assumed-role/MyRole/session-name`), so the role is the useful label; the
+ * session name is stripped.
+ */
+export function shortIdentity(arn: string): string {
+	if (arn.length === 0) return 'unknown';
+	const resource = arn.split(':').at(-1) ?? arn;
+	const parts = resource.split('/').filter((part) => part.length > 0);
+	if (parts.length === 0) return arn;
+	const [kind, name] = parts;
+	if ((kind === 'assumed-role' || kind === 'role' || kind === 'user') && name !== undefined)
+		return name;
+	return parts.at(-1) ?? arn;
 }

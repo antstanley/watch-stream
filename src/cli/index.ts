@@ -44,8 +44,11 @@ import {
 import {
 	isHeadless,
 	probeCredentials as probeCredentialsDefault,
+	readIdentity as readIdentityDefault,
 	runLogin as runLoginDefault,
+	shortIdentity,
 	type CredentialProbe,
+	type IdentityProbe,
 } from './preflight.ts';
 import { createUi, isInteractive, type Ui } from './ui.ts';
 
@@ -74,6 +77,8 @@ export type CliIo = {
 	probeCredentials: (input: { baseUrl: string; region: string | null }) => Promise<CredentialProbe>;
 	/** Runs `aws ...` with the terminal attached, so an interactive login works. */
 	runLogin: (command: string[]) => Promise<number>;
+	/** Asks the app who the resolved credentials belong to (`sts:GetCallerIdentity`). */
+	readIdentity: (input: { baseUrl: string; region: string | null }) => Promise<IdentityProbe>;
 	/** Health poller. */
 	waitForHealth: typeof waitForHealth;
 	/** Used for tests that must not spawn a server. */
@@ -140,6 +145,7 @@ function defaultIo(): CliIo {
 		readLocalEnvValues: () => (appRoot === null ? {} : readLocalEnvValues(appRoot)),
 		probeCredentials: (input) => probeCredentialsDefault(input),
 		runLogin: (command) => runLoginDefault(command),
+		readIdentity: (input) => readIdentityDefault(input),
 		waitForHealth,
 		startServerImpl: startServer,
 		spawnImpl: spawn,
@@ -174,7 +180,16 @@ export function resolveCliRegion(options: CliOptions, io: CliIo): string | null 
  *
  * Emulator runs are skipped: `--floci` supplies throwaway keys on purpose.
  */
-async function ensureCredentials(input: {
+/**
+ * Asks the running app whether it can read logs, and when it cannot because of
+ * credentials, decides which profile the run should be using.
+ *
+ * With no profile in play it asks, because a machine with several profiles is
+ * rarely served by the ambient default. The identity check and the login come
+ * after the app has been restarted with that profile: only then do they test
+ * the profile the user actually chose.
+ */
+async function assessCredentials(input: {
 	options: CliOptions;
 	io: CliIo;
 	ui: Ui;
@@ -182,22 +197,28 @@ async function ensureCredentials(input: {
 	region: string | null;
 	/** Profile the server was started with, or `null` when it was left ambient. */
 	startProfile: string | null;
-}): Promise<{ restartWith: string | null; login: 'succeeded' | 'declined' | 'failed' | 'none' }> {
+}): Promise<
+	| { status: 'ok' }
+	| { status: 'other'; message: string }
+	| {
+			status: 'credentials';
+			profile: string;
+			chosen: string | null;
+			message: string;
+			code?: string;
+	  }
+> {
 	const { options, io, ui, url, region, startProfile } = input;
-	if (options.endpoint !== null) return { restartWith: null, login: 'none' };
+	if (options.endpoint !== null) return { status: 'ok' };
 
 	const probe = await io.probeCredentials({ baseUrl: url, region });
-	if (probe.ok) return { restartWith: null, login: 'none' };
+	if (probe.ok) return { status: 'ok' };
 	if (!probe.credentialProblem || !isCredentialFailure(probe.code, probe.message)) {
-		ui.warn(`could not list log groups: ${probe.message}`);
-		return { restartWith: null, login: 'none' };
+		return { status: 'other', message: probe.message };
 	}
 
 	ui.warn(`AWS credentials are not usable: ${probe.message}`);
 
-	// With no profile chosen, the run has been using the ambient default. That
-	// is rarely what someone with several profiles wants, so ask - the answer
-	// decides both the login command and the profile the app runs with.
 	let profile = startProfile ?? 'default';
 	let chosen: string | null = null;
 	if (startProfile === null) {
@@ -216,32 +237,42 @@ async function ensureCredentials(input: {
 		}
 	}
 
-	const style = readProfileStyle(io.readConfigText(), io.readCredentialsText(), profile);
-	const failure = classifyCredentialFailure(probe.message, probe.code);
-	// The effective profile decides the command: `--profile`, else AWS_PROFILE,
-	// else the default. Passing `options.profile` alone would drop `--profile`
-	// for an ambient AWS_PROFILE and log in the wrong account.
-	const advice = loginAdvice({
-		style,
-		failure,
-		profile: chosen ?? startProfile,
-		remote: isHeadless(io.env),
-	});
+	return { status: 'credentials', profile, chosen, message: probe.message, code: probe.code };
+}
+
+/**
+ * Offers the login that repairs a credential failure, runs it if accepted, and
+ * reports what happened. The profile is the one the app is currently using.
+ */
+async function offerLogin(input: {
+	options: CliOptions;
+	io: CliIo;
+	ui: Ui;
+	profile: string | null;
+	failureMessage: string;
+	failureCode?: string;
+}): Promise<{ login: 'succeeded' | 'declined' | 'failed' | 'none' }> {
+	const { io, ui, profile, failureMessage, failureCode } = input;
+
+	const name = profile ?? 'default';
+	const style = readProfileStyle(io.readConfigText(), io.readCredentialsText(), name);
+	const failure = classifyCredentialFailure(failureMessage, failureCode);
+	const advice = loginAdvice({ style, failure, profile, remote: isHeadless(io.env) });
 
 	if (advice === null) {
 		ui.info(
 			style === 'static'
-				? `the ${describeStyle(style)} in profile "${profile}" look wrong - check them with \`aws configure --profile ${profile}\``
-				: `no login command applies to profile "${profile}" (${describeStyle(style)})`,
+				? `the ${describeStyle(style)} in profile "${name}" look wrong - check them with \`aws configure --profile ${name}\``
+				: `no login command applies to profile "${name}" (${describeStyle(style)})`,
 		);
-		return { restartWith: chosen, login: 'none' };
+		return { login: 'none' };
 	}
 
 	const label = `aws ${advice.command.join(' ')}`;
 	const accepted = await ui.confirm(`${advice.hint}. Run \`${label}\` now?`);
 	if (!accepted) {
 		ui.info(`run it yourself, then press Refresh in the UI: ${label}`);
-		return { restartWith: chosen, login: 'declined' };
+		return { login: 'declined' };
 	}
 
 	ui.info(`running ${label}`);
@@ -249,17 +280,9 @@ async function ensureCredentials(input: {
 	if (code !== 0) {
 		ui.warn(`${label} exited with code ${code}`);
 		ui.info(`log in another terminal, then press Refresh in the UI: ${label}`);
-		return { restartWith: chosen, login: 'failed' };
+		return { login: 'failed' };
 	}
-
-	// A profile that was not in play needs the app restarted with it; the caller
-	// does that and reports the outcome.
-	if (chosen !== null) return { restartWith: chosen, login: 'succeeded' };
-
-	const retry = await io.probeCredentials({ baseUrl: url, region });
-	if (retry.ok) ui.info('signed in - credentials work now');
-	else ui.warn(`still failing after login: ${retry.message}`);
-	return { restartWith: null, login: 'succeeded' };
+	return { login: 'succeeded' };
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -371,7 +394,7 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 
 	// Before sending anyone to a UI that cannot load logs, check that AWS will
 	// actually answer, and offer the login that fixes it.
-	const credentials = await ensureCredentials({
+	const assessment = await assessCredentials({
 		options,
 		io,
 		ui,
@@ -379,45 +402,83 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 		region,
 		startProfile: profile,
 	});
-	if (credentials.restartWith !== null) {
-		// A different profile was chosen: only a fresh process will use it, and
-		// that profile brings its own region from its own config section.
-		const restartedProfile = credentials.restartWith;
-		const restartedRegion = resolveRunRegion({
-			region: options.region,
-			profile: restartedProfile,
-			base: io.env,
-			configText: io.readConfigText(),
-		});
-		ui.info(`restarting with profile ${restartedProfile}`);
-		await stopServer(child);
-		child = io.startServerImpl({
-			appRoot: io.appRoot,
-			env: buildChildEnv({
-				base: baseEnv,
-				profile: restartedProfile,
-				region: restartedRegion,
-				endpoint: null,
-			}),
-			port: options.port,
-			host: options.host,
-			verbose: options.verbose,
-		});
-		const healthy = await io.waitForHealth(healthUrl(url), { fetchImpl: fetch });
-		if (!healthy) {
-			ui.failSpinner(`the server did not come back up on ${url}`);
+	if (assessment.status === 'other') {
+		ui.warn(`could not list log groups: ${assessment.message}`);
+	}
+
+	if (assessment.status === 'credentials') {
+		// A profile that was not in play needs the app restarted with it: that is
+		// the only way to find out whether its credentials already work, and the
+		// only way the browser can use it.
+		const activeProfile = assessment.chosen === null ? null : assessment.chosen;
+		let activeRegion = region;
+		let failureMessage = assessment.message;
+		let failureCode = assessment.code;
+
+		if (assessment.chosen !== null) {
+			activeRegion = resolveRunRegion({
+				region: options.region,
+				profile: assessment.chosen,
+				base: io.env,
+				configText: io.readConfigText(),
+			});
+			ui.info(`restarting with profile ${assessment.chosen}`);
 			await stopServer(child);
-			return 1;
+			child = io.startServerImpl({
+				appRoot: io.appRoot,
+				env: buildChildEnv({
+					base: baseEnv,
+					profile: assessment.chosen,
+					region: activeRegion,
+					endpoint: null,
+				}),
+				port: options.port,
+				host: options.host,
+				verbose: options.verbose,
+			});
+			const healthy = await io.waitForHealth(healthUrl(url), { fetchImpl: fetch });
+			if (!healthy) {
+				ui.failSpinner(`the server did not come back up on ${url}`);
+				await stopServer(child);
+				return 1;
+			}
+
+			// Now the question is about the chosen profile, not the ambient one.
+			const identity = await io.readIdentity({ baseUrl: url, region: activeRegion });
+			if (identity.ok) {
+				ui.info(
+					`profile ${assessment.chosen} already works (${shortIdentity(identity.identity.arn)}) - using it`,
+				);
+				ui.outro(`${url} (Ctrl+C to stop)`);
+				if (options.open) io.openBrowser(url);
+				const code = await io.waitForStop(child);
+				ui.outro('stopped');
+				return code;
+			}
+			failureMessage = identity.message;
+			failureCode = identity.code;
 		}
 
-		if (credentials.login === 'succeeded') {
-			const retry = await io.probeCredentials({ baseUrl: url, region: restartedRegion });
-			if (retry.ok) ui.info(`signed in as ${restartedProfile} - credentials work now`);
-			else ui.warn(`still failing with profile ${restartedProfile}: ${retry.message}`);
-		} else {
-			// Declined or failed: the app now runs as the chosen profile, but it
-			// still cannot read logs until someone logs in.
-			ui.info(`the app is using profile ${restartedProfile}; log in, then press Refresh in the UI`);
+		const outcome = await offerLogin({
+			options,
+			io,
+			ui,
+			profile: activeProfile ?? assessment.profile,
+			failureMessage,
+			failureCode,
+		});
+
+		if (outcome.login === 'succeeded') {
+			const identity = await io.readIdentity({ baseUrl: url, region: activeRegion });
+			if (identity.ok) {
+				ui.info(
+					`signed in as ${shortIdentity(identity.identity.arn)}${activeProfile === null ? '' : ` (${activeProfile})`}`,
+				);
+			} else {
+				ui.warn(`still failing after login: ${identity.message}`);
+			}
+		} else if (activeProfile !== null) {
+			ui.info(`the app is using profile ${activeProfile}; log in, then press Refresh in the UI`);
 		}
 	}
 
