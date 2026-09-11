@@ -153,6 +153,18 @@ running aws sso login --profile my-profile
 signed in - credentials work now
 ```
 
+If you did not name a profile and you have more than one, it asks which one first. The answer decides
+both the login and the profile the app runs with, so a chosen profile is applied by restarting the
+server with it (and with that profile's own region):
+
+```text
+? Which AWS profile should watch-tail use?  (type to search, then Enter)
+using profile beyond-mzansi
+? Sign in to the SSO session for beyond-mzansi. Run `aws sso login --profile beyond-mzansi` now? › yes
+restarting with profile beyond-mzansi
+signed in as beyond-mzansi - credentials work now
+```
+
 | Your profile                           | What it runs                                                                               |
 | -------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `sso_session` / `sso_start_url`        | `aws sso login --profile <name>`                                                           |

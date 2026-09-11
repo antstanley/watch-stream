@@ -180,44 +180,68 @@ async function ensureCredentials(input: {
 	ui: Ui;
 	url: string;
 	region: string | null;
-}): Promise<void> {
-	const { options, io, ui, url, region } = input;
-	if (options.endpoint !== null) return;
+	/** Profile the server was started with, or `null` when it was left ambient. */
+	startProfile: string | null;
+}): Promise<{ restartWith: string | null; login: 'succeeded' | 'declined' | 'failed' | 'none' }> {
+	const { options, io, ui, url, region, startProfile } = input;
+	if (options.endpoint !== null) return { restartWith: null, login: 'none' };
 
 	const probe = await io.probeCredentials({ baseUrl: url, region });
-	if (probe.ok) return;
+	if (probe.ok) return { restartWith: null, login: 'none' };
 	if (!probe.credentialProblem || !isCredentialFailure(probe.code, probe.message)) {
 		ui.warn(`could not list log groups: ${probe.message}`);
-		return;
+		return { restartWith: null, login: 'none' };
 	}
 
-	// The flag wins, then the ambient AWS_PROFILE: both decide which login
-	// command can actually repair the failure.
-	const profile = options.profile ?? ambientProfile(io.env) ?? 'default';
+	ui.warn(`AWS credentials are not usable: ${probe.message}`);
+
+	// With no profile chosen, the run has been using the ambient default. That
+	// is rarely what someone with several profiles wants, so ask - the answer
+	// decides both the login command and the profile the app runs with.
+	let profile = startProfile ?? 'default';
+	let chosen: string | null = null;
+	if (startProfile === null) {
+		const profiles = io.readProfiles();
+		if (profiles.length > 1) {
+			const answer = await ui.choose(
+				'Which AWS profile should watch-tail use?',
+				profiles.map((name) => ({ value: name, label: name })),
+				profiles.includes('default') ? 'default' : profiles[0],
+			);
+			if (answer !== null && answer !== 'default') {
+				chosen = answer;
+				profile = answer;
+				ui.info(`using profile ${answer}`);
+			}
+		}
+	}
+
 	const style = readProfileStyle(io.readConfigText(), io.readCredentialsText(), profile);
 	const failure = classifyCredentialFailure(probe.message, probe.code);
+	// The effective profile decides the command: `--profile`, else AWS_PROFILE,
+	// else the default. Passing `options.profile` alone would drop `--profile`
+	// for an ambient AWS_PROFILE and log in the wrong account.
 	const advice = loginAdvice({
 		style,
 		failure,
-		profile,
+		profile: chosen ?? startProfile,
 		remote: isHeadless(io.env),
 	});
 
-	ui.warn(`AWS credentials are not usable: ${probe.message}`);
 	if (advice === null) {
 		ui.info(
 			style === 'static'
 				? `the ${describeStyle(style)} in profile "${profile}" look wrong - check them with \`aws configure --profile ${profile}\``
 				: `no login command applies to profile "${profile}" (${describeStyle(style)})`,
 		);
-		return;
+		return { restartWith: chosen, login: 'none' };
 	}
 
 	const label = `aws ${advice.command.join(' ')}`;
 	const accepted = await ui.confirm(`${advice.hint}. Run \`${label}\` now?`);
 	if (!accepted) {
 		ui.info(`run it yourself, then press Refresh in the UI: ${label}`);
-		return;
+		return { restartWith: chosen, login: 'declined' };
 	}
 
 	ui.info(`running ${label}`);
@@ -225,12 +249,17 @@ async function ensureCredentials(input: {
 	if (code !== 0) {
 		ui.warn(`${label} exited with code ${code}`);
 		ui.info(`log in another terminal, then press Refresh in the UI: ${label}`);
-		return;
+		return { restartWith: chosen, login: 'failed' };
 	}
+
+	// A profile that was not in play needs the app restarted with it; the caller
+	// does that and reports the outcome.
+	if (chosen !== null) return { restartWith: chosen, login: 'succeeded' };
 
 	const retry = await io.probeCredentials({ baseUrl: url, region });
 	if (retry.ok) ui.info('signed in - credentials work now');
 	else ui.warn(`still failing after login: ${retry.message}`);
+	return { restartWith: null, login: 'succeeded' };
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -325,7 +354,7 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 	}
 
 	ui.startSpinner('starting the local UI...');
-	const child = io.startServerImpl({
+	let child = io.startServerImpl({
 		appRoot: io.appRoot,
 		env: childEnv,
 		port: options.port,
@@ -342,7 +371,55 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 
 	// Before sending anyone to a UI that cannot load logs, check that AWS will
 	// actually answer, and offer the login that fixes it.
-	await ensureCredentials({ options, io, ui, url, region });
+	const credentials = await ensureCredentials({
+		options,
+		io,
+		ui,
+		url,
+		region,
+		startProfile: profile,
+	});
+	if (credentials.restartWith !== null) {
+		// A different profile was chosen: only a fresh process will use it, and
+		// that profile brings its own region from its own config section.
+		const restartedProfile = credentials.restartWith;
+		const restartedRegion = resolveRunRegion({
+			region: options.region,
+			profile: restartedProfile,
+			base: io.env,
+			configText: io.readConfigText(),
+		});
+		ui.info(`restarting with profile ${restartedProfile}`);
+		await stopServer(child);
+		child = io.startServerImpl({
+			appRoot: io.appRoot,
+			env: buildChildEnv({
+				base: baseEnv,
+				profile: restartedProfile,
+				region: restartedRegion,
+				endpoint: null,
+			}),
+			port: options.port,
+			host: options.host,
+			verbose: options.verbose,
+		});
+		const healthy = await io.waitForHealth(healthUrl(url), { fetchImpl: fetch });
+		if (!healthy) {
+			ui.failSpinner(`the server did not come back up on ${url}`);
+			await stopServer(child);
+			return 1;
+		}
+
+		if (credentials.login === 'succeeded') {
+			const retry = await io.probeCredentials({ baseUrl: url, region: restartedRegion });
+			if (retry.ok) ui.info(`signed in as ${restartedProfile} - credentials work now`);
+			else ui.warn(`still failing with profile ${restartedProfile}: ${retry.message}`);
+		} else {
+			// Declined or failed: the app now runs as the chosen profile, but it
+			// still cannot read logs until someone logs in.
+			ui.info(`the app is using profile ${restartedProfile}; log in, then press Refresh in the UI`);
+		}
+	}
 
 	if (options.open) io.openBrowser(url);
 	ui.outro(`${url} (Ctrl+C to stop)`);

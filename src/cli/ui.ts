@@ -36,11 +36,16 @@ export type Ui = {
 	confirm(message: string, initial?: boolean): Promise<boolean>;
 };
 
-/** Decides whether the process can render animated output and ask questions. */
+/**
+ * Decides whether the process can render animated output and ask questions.
+ *
+ * `NO_COLOR` is deliberately *not* consulted: it asks for no colour, which the
+ * prompt library honours on its own, and reading it as "do not prompt" silently
+ * disabled the login and profile questions for anyone who sets it.
+ */
 export function isInteractive(env: NodeJS.ProcessEnv = process.env): boolean {
 	if (env.CI !== undefined && env.CI !== '' && env.CI !== 'false') return false;
 	if (env.WATCH_TAIL_PLAIN === '1') return false;
-	if (env.NO_COLOR !== undefined && env.NO_COLOR !== '') return false;
 	return process.stdout.isTTY === true && process.stdin.isTTY === true;
 }
 
