@@ -6,7 +6,7 @@
  * paths are dispatched before normal flag parsing.
  */
 import t from '@bomb.sh/tab';
-import { HISTORIC_PRESETS } from '../lib/time-range.ts';
+import { readProfiles } from '../lib/cli/aws.ts';
 import { DEFAULT_HOST, DEFAULT_PORT, FLOCI_ENDPOINT } from './options.ts';
 
 /** Shells `tab` can generate scripts for. */
@@ -68,6 +68,7 @@ function registerCompletionSpec(profiles: string[] = []): void {
 		complete(DEFAULT_HOST, 'loopback only');
 		complete('0.0.0.0', 'all interfaces (exposes your AWS access)');
 	});
+	t.option('open', 'Open a browser window (default)');
 	t.option('no-open', 'Do not open a browser window');
 	t.option('print', 'Print the environment and exit');
 	t.option('list', 'List AWS profiles and exit');
@@ -79,9 +80,6 @@ function registerCompletionSpec(profiles: string[] = []): void {
 	complete.argument('shell', function (this: unknown, emit) {
 		for (const shell of SHELLS) emit(shell, `${shell} completion script`);
 	});
-
-	// Historic window presets are useful for any future flag that takes a range.
-	t.command('presets', `Historic ranges: ${HISTORIC_PRESETS.join(', ')}`);
 }
 
 /**
@@ -90,17 +88,22 @@ function registerCompletionSpec(profiles: string[] = []): void {
  * Returns the exit code for the CLI, or `null` when the words are not a
  * completion request at all.
  */
-export function handleCompletion(words: string[], executable = PROGRAM): number | null {
+export function handleCompletion(
+	words: string[],
+	options: { executable?: string; profiles?: string[] } = {},
+): number | null {
 	if (words.length === 0) return null;
 	const [first, ...rest] = words;
-	registerCompletionSpec();
+	// Profile names come from the user's own AWS files, so `--profile=<TAB>`
+	// completes the profiles they actually have.
+	registerCompletionSpec(options.profiles ?? readProfiles());
 	if (first === '--') {
 		t.parse(rest);
 		return 0;
 	}
 	if ((SHELLS as readonly string[]).includes(first)) {
-		// `tab` prints the script; `executable` is how the shell re-invokes us.
-		t.setup(PROGRAM, executable, first);
+		// `tab` prints the script; the executable is how the shell re-invokes us.
+		t.setup(PROGRAM, options.executable ?? PROGRAM, first);
 		return 0;
 	}
 	return null;

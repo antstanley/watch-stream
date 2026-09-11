@@ -147,7 +147,7 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 	const options = parsed.options;
 
 	if (options.complete !== null) {
-		const code = handleCompletion(options.complete);
+		const code = handleCompletion(options.complete, { profiles: io.readProfiles() });
 		if (code !== null) return code;
 	}
 	if (options.help) {
