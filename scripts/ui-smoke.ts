@@ -1,0 +1,434 @@
+#!/usr/bin/env node
+/**
+ * Browser smoke check for the log window.
+ *
+ * Unit and component tests live in vitest (`pnpm test`). This script covers the
+ * things only a real browser can show: horizontal scrolling, the wrap and JSON
+ * toggles, and dragging the two resizable columns. It drives Playwright with the
+ * already-installed Google Chrome (`--channel chrome`), so no browser download is
+ * needed, and it never writes to AWS: it only loads the page and reads the DOM.
+ *
+ * Usage:
+ *   node scripts/ui-smoke.ts                                  # http://localhost:5173
+ *   node scripts/ui-smoke.ts --url http://localhost:5196 --group /aws/lambda/checkout-api
+ *   node scripts/ui-smoke.ts --screenshot /tmp/ui.png --timeout 20000 --channel chromium
+ *   node scripts/ui-smoke.ts --help
+ *
+ * Exit code 0 when every check passes, 1 when a check fails, 2 for bad arguments.
+ */
+import { chromium } from 'playwright';
+import type { Browser } from 'playwright';
+
+type Options = {
+	url: string;
+	region: string | null;
+	group: string | null;
+	channel: string;
+	screenshot: string | null;
+	timeout: number;
+};
+
+type Check = { name: string; ok: boolean; detail: string };
+
+const USAGE = `Usage: node scripts/ui-smoke.ts [options]
+
+  --url <base>         app base URL (default http://localhost:5173)
+  --region <code>      region to pass in the query string
+  --group <name>       log group to select (default: first row in the list)
+  --channel <name>     Playwright browser channel (default chrome)
+  --timeout <ms>       per-step timeout (default 15000)
+  --screenshot <path>  write a PNG of the final state
+  --help               show this text`;
+
+/** Parses the command line; never throws. */
+function parseArgs(argv: string[]): { ok: true; options: Options } | { ok: false; error: string } {
+	const options: Options = {
+		url: 'http://localhost:5173',
+		region: null,
+		group: null,
+		channel: 'chrome',
+		screenshot: null,
+		timeout: 15_000,
+	};
+
+	for (let index = 0; index < argv.length; index += 1) {
+		const raw = argv[index];
+		if (raw === '--') continue;
+		if (raw === '--help' || raw === '-h') return { ok: true, options: { ...options, url: '' } };
+		if (raw === '--screenshot' && argv[index + 1] === undefined) {
+			return { ok: false, error: 'Missing value for --screenshot' };
+		}
+		const match = /^--([a-z-]+)(?:=(.*))?$/.exec(raw);
+		if (match === null) return { ok: false, error: `Unknown option "${raw}"` };
+		const [, name, inline] = match;
+		const value = inline ?? argv[index + 1];
+		if (value === undefined) return { ok: false, error: `Missing value for --${name}` };
+		if (inline === undefined) index += 1;
+
+		switch (name) {
+			case 'url':
+				options.url = value;
+				break;
+			case 'region':
+				options.region = value;
+				break;
+			case 'group':
+				options.group = value;
+				break;
+			case 'channel':
+				options.channel = value;
+				break;
+			case 'screenshot':
+				options.screenshot = value;
+				break;
+			case 'timeout': {
+				const parsed = Number(value);
+				if (!Number.isFinite(parsed) || parsed <= 0) {
+					return { ok: false, error: `Invalid --timeout value "${value}"` };
+				}
+				options.timeout = parsed;
+				break;
+			}
+			default:
+				return { ok: false, error: `Unknown option "--${name}"` };
+		}
+	}
+
+	if (options.url === '') return { ok: false, error: '__help__' };
+	return { ok: true, options };
+}
+
+/** Builds the page URL with the region and group query parameters. */
+function pageUrl(options: Options, group: string | null): string {
+	const url = new URL(options.url);
+	if (options.region !== null) url.searchParams.set('region', options.region);
+	if (group !== null) url.searchParams.set('group', group);
+	return url.toString();
+}
+
+/** Records a check result. */
+function check(checks: Check[], name: string, ok: boolean, detail = ''): void {
+	checks.push({ name, ok, detail });
+}
+
+async function main(): Promise<number> {
+	const parsed = parseArgs(process.argv.slice(2));
+	if (!parsed.ok) {
+		if (parsed.error !== '__help__') console.error(`ui-smoke: ${parsed.error}`);
+		console.error(USAGE);
+		return 2;
+	}
+	const options = parsed.options;
+	if (process.argv.includes('--help') || process.argv.includes('-h')) {
+		console.log(USAGE);
+		return 0;
+	}
+
+	let browser: Browser | null = null;
+	const checks: Check[] = [];
+	try {
+		// `channel: chrome` uses the Google Chrome already on the machine.
+		browser = await chromium.launch({
+			...(options.channel === 'chromium' ? {} : { channel: options.channel }),
+			headless: true,
+		});
+		const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+		const consoleErrors: string[] = [];
+		page.on('console', (message) => {
+			if (message.type() === 'error') consoleErrors.push(message.text());
+		});
+		page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
+
+		const health = await (
+			await page.request.get(new URL('/api/health', options.url).toString())
+		).json();
+		console.log(
+			`api: ok=${String(health.ok)} region=${String(health.region)} endpoint=${String(health.endpoint)} credentials=${String(health.credentials)}`,
+		);
+
+		await page.goto(pageUrl(options, null), { waitUntil: 'domcontentloaded' });
+		await page.waitForSelector('[data-testid="group-row"]', { timeout: options.timeout });
+		const rows = await page.locator('[data-testid="group-row"]').count();
+		check(checks, 'log groups listed', rows > 0, `${rows} rows`);
+
+		const group =
+			options.group ??
+			(await page
+				.locator('[data-testid="group-row"]')
+				.first()
+				.locator('span')
+				.first()
+				.textContent()) ??
+			'';
+		await page.goto(pageUrl(options, group), { waitUntil: 'domcontentloaded' });
+		await page.waitForSelector('[data-testid="log-scroller"]', { timeout: options.timeout });
+		check(
+			checks,
+			'group selected',
+			(await page.textContent('[data-testid="status-badge"]')) !== null,
+		);
+
+		let lines = 0;
+		try {
+			await page.waitForSelector('[data-testid="log-line"]', { timeout: options.timeout });
+			lines = await page.locator('[data-testid="log-line"]').count();
+		} catch {
+			lines = 0;
+		}
+		check(
+			checks,
+			'log lines rendered',
+			lines > 0,
+			lines === 0 ? 'no events in the lookback window' : `${lines} lines`,
+		);
+
+		const layout = await page.evaluate(() => {
+			const viewportWidth = window.innerWidth;
+			const viewportHeight = window.innerHeight;
+			const mainElement = document.querySelector('main');
+			const sidebar = document.querySelector('[data-testid="sidebar"]');
+			const scroller = document.querySelector('[data-testid="log-scroller"]');
+			const mainBox = mainElement?.getBoundingClientRect();
+			const sidebarBox = sidebar?.getBoundingClientRect();
+			const scrollerBox = scroller?.getBoundingClientRect();
+			return {
+				leftGutter: Math.round(mainBox?.left ?? -1),
+				rightGutter: Math.round(viewportWidth - (scrollerBox?.right ?? viewportWidth)),
+				emptyBelow: Math.round(viewportHeight - (sidebarBox?.bottom ?? viewportHeight)),
+				pageScrolls: document.documentElement.scrollHeight > viewportHeight + 1,
+			};
+		});
+		check(
+			checks,
+			'layout is left-aligned',
+			layout.leftGutter <= 32,
+			`${layout.leftGutter}px gutter`,
+		);
+		check(
+			checks,
+			'log window fills the width',
+			layout.rightGutter <= 32,
+			`${layout.rightGutter}px gutter`,
+		);
+		check(
+			checks,
+			'panes fill the viewport height',
+			layout.emptyBelow <= 32,
+			`${layout.emptyBelow}px below`,
+		);
+		check(checks, 'the page itself does not scroll', !layout.pageScrolls);
+
+		// A long group list must scroll inside its pane instead of growing the page.
+		const listOverflow = await page.evaluate(() => {
+			const ul = document.querySelector('ul:has([data-testid="group-row"])');
+			if (ul === null) return null;
+			const style = getComputedStyle(ul);
+			return {
+				overflows: ul.scrollHeight > ul.clientHeight + 1,
+				scrollable: style.overflowY === 'auto' || style.overflowY === 'scroll',
+			};
+		});
+		check(
+			checks,
+			'the group list scrolls inside its pane',
+			listOverflow === null || !listOverflow.overflows || listOverflow.scrollable,
+			listOverflow === null
+				? 'no list rendered'
+				: `${listOverflow.scrollable ? 'scrollable' : 'not scrollable'}`,
+		);
+
+		const scroll = await page.evaluate(() => {
+			const scroller = document.querySelector('[data-testid="log-scroller"]') as HTMLElement;
+			const message = document.querySelector('[data-testid="log-message"]');
+			const stream = document.querySelector('[data-testid="log-stream"]');
+			return {
+				overflowX: getComputedStyle(scroller).overflowX,
+				whiteSpace: message === null ? '' : getComputedStyle(message).whiteSpace,
+				streamOverflow: stream === null ? '' : getComputedStyle(stream).textOverflow,
+				streamTitle: stream?.getAttribute('title') ?? '',
+				streamText: stream?.textContent ?? '',
+			};
+		});
+		check(checks, 'horizontal scrolling enabled', scroll.overflowX === 'auto', scroll.overflowX);
+		check(checks, 'lines do not wrap by default', scroll.whiteSpace === 'pre', scroll.whiteSpace);
+		check(
+			checks,
+			'stream column truncates with a tooltip',
+			scroll.streamTitle === scroll.streamText && scroll.streamOverflow === 'ellipsis',
+			`${scroll.streamText.length} chars`,
+		);
+
+		if (lines > 0) {
+			await page.click('[data-testid="wrap-toggle"]');
+			const wrapped = await page.evaluate(
+				() =>
+					getComputedStyle(document.querySelector('[data-testid="log-message"]') as Element)
+						.whiteSpace,
+			);
+			check(checks, 'wrap toggle switches to pre-wrap', wrapped === 'pre-wrap', wrapped);
+			await page.click('[data-testid="wrap-toggle"]');
+
+			// Look only at messages that are JSON, so multi-line non-JSON lines
+			// (stack traces) cannot make this check lie.
+			const jsonState = (): Promise<{ total: number; multiline: number }> =>
+				page.evaluate(() => {
+					const json = [...document.querySelectorAll('[data-testid="log-message"]')].filter((el) =>
+						(el.textContent ?? '').trimStart().startsWith('{'),
+					);
+					return {
+						total: json.length,
+						multiline: json.filter((el) => (el.textContent ?? '').includes('\n')).length,
+					};
+				});
+
+			const pretty = await jsonState();
+			await page.click('[data-testid="json-toggle"]');
+			const rawToggle = await page.getAttribute('[data-testid="json-toggle"]', 'aria-pressed');
+			const raw = await jsonState();
+			// Every JSON message must be expanded while the toggle is on, and turning
+			// it off must never expand more. A raw message can still carry newlines of
+			// its own (CloudWatch sometimes stores pre-formatted JSON), so `raw` is
+			// compared against `pretty` rather than against zero.
+			check(
+				checks,
+				'json pretty-printing expands every JSON line',
+				pretty.total === 0 ||
+					(pretty.multiline === pretty.total && raw.multiline <= pretty.multiline),
+				pretty.total === 0
+					? 'no JSON lines in this group'
+					: `${pretty.total} JSON lines: pretty=${pretty.multiline}, raw=${raw.multiline}`,
+			);
+			check(checks, 'json toggle reports its state', rawToggle === 'false', String(rawToggle));
+			await page.click('[data-testid="json-toggle"]');
+
+			const scrollerBox = await page.locator('[data-testid="log-scroller"]').boundingBox();
+			const handle = await page.locator('[data-testid="prefix-resizer"]').boundingBox();
+			const prefixBefore = Number(
+				await page.getAttribute('[data-testid="prefix-resizer"]', 'aria-valuenow'),
+			);
+			if (scrollerBox !== null && handle !== null) {
+				// The handle spans the whole (tall) log canvas, so grab it inside the visible window.
+				const grabY = scrollerBox.y + scrollerBox.height / 2;
+				await page.mouse.move(handle.x + 3, grabY);
+				await page.mouse.down();
+				await page.mouse.move(handle.x + 63, grabY, { steps: 6 });
+				await page.mouse.up();
+			}
+			const prefixAfter = Number(
+				await page.getAttribute('[data-testid="prefix-resizer"]', 'aria-valuenow'),
+			);
+			check(
+				checks,
+				'prefix column drag resizes',
+				prefixAfter === prefixBefore + 60,
+				`${prefixBefore} -> ${prefixAfter}`,
+			);
+
+			await page.focus('[data-testid="prefix-resizer"]');
+			await page.keyboard.press('ArrowLeft');
+			const prefixKey = Number(
+				await page.getAttribute('[data-testid="prefix-resizer"]', 'aria-valuenow'),
+			);
+			check(
+				checks,
+				'prefix column arrow key steps 16px',
+				prefixKey === prefixAfter - 16,
+				`${prefixAfter} -> ${prefixKey}`,
+			);
+
+			const sidebarBox = await page.locator('[data-testid="sidebar-resizer"]').boundingBox();
+			const sidebarBefore = Number(
+				await page.getAttribute('[data-testid="sidebar-resizer"]', 'aria-valuenow'),
+			);
+			if (sidebarBox !== null) {
+				await page.mouse.move(sidebarBox.x + 3, sidebarBox.y + sidebarBox.height / 2);
+				await page.mouse.down();
+				await page.mouse.move(sidebarBox.x + 83, sidebarBox.y + sidebarBox.height / 2, {
+					steps: 6,
+				});
+				await page.mouse.up();
+			}
+			const sidebarAfter = Number(
+				await page.getAttribute('[data-testid="sidebar-resizer"]', 'aria-valuenow'),
+			);
+			check(
+				checks,
+				'group-list pane drag resizes',
+				sidebarAfter > sidebarBefore,
+				`${sidebarBefore} -> ${sidebarAfter}`,
+			);
+		}
+
+		// Historic windows: the mode toggle, the preset chips and a finite scan.
+		await page.click('[data-testid="mode-historic"]');
+		await page.waitForTimeout(300);
+		const historicPressed = await page.getAttribute(
+			'[data-testid="mode-historic"]',
+			'aria-pressed',
+		);
+		const presets = await page.locator('[data-testid^="preset-"]').count();
+		check(
+			checks,
+			'historic mode exposes the presets',
+			historicPressed === 'true' && presets >= 7,
+			`${presets} options`,
+		);
+
+		await page.click('[data-testid="preset-24h"]');
+		await page.waitForTimeout(1200);
+		const url = page.url();
+		const chip = await page.textContent('[data-testid="window-chip"]').catch(() => null);
+		check(
+			checks,
+			'selecting a preset scopes the window',
+			url.includes('mode=historic') && (chip ?? '').includes('→'),
+			`${new URL(url).search} chip=${chip ?? 'none'}`,
+		);
+
+		await page.click('[data-testid="preset-15m"]');
+		let completed = false;
+		try {
+			await page.waitForFunction(
+				() =>
+					document.querySelector('[data-testid="window-complete"]') !== null ||
+					(document.querySelector('[data-testid="status-badge"]')?.textContent ?? '').includes(
+						'ended',
+					),
+				undefined,
+				{ timeout: options.timeout * 4 },
+			);
+			completed = true;
+		} catch {
+			completed = false;
+		}
+		check(checks, 'a 15 minute window finishes on its own', completed);
+
+		await page.click('[data-testid="mode-live"]');
+		await page.waitForTimeout(500);
+		const backToLive = await page.getAttribute('[data-testid="mode-live"]', 'aria-pressed');
+		check(checks, 'switching back to live restarts the tail', backToLive === 'true');
+
+		check(checks, 'no console errors', consoleErrors.length === 0, consoleErrors.join(' | '));
+
+		if (options.screenshot !== null) {
+			await page.screenshot({ path: options.screenshot });
+			console.log(`screenshot: ${options.screenshot}`);
+		}
+	} catch (error) {
+		check(checks, 'browser run', false, error instanceof Error ? error.message : String(error));
+	} finally {
+		await browser?.close();
+	}
+
+	let failed = 0;
+	for (const entry of checks) {
+		if (!entry.ok) failed += 1;
+		console.log(
+			`${entry.ok ? 'PASS' : 'FAIL'}  ${entry.name}${entry.detail === '' ? '' : `  (${entry.detail})`}`,
+		);
+	}
+	console.log(`${checks.length - failed}/${checks.length} checks passed`);
+	return failed === 0 ? 0 : 1;
+}
+
+process.exitCode = await main();

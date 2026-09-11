@@ -1,0 +1,44 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": ["typescript", "unicorn", "oxc", "import", "promise", "node", "vitest"],
+	"categories": {
+		"correctness": "error",
+		"suspicious": "warn",
+		"perf": "warn"
+	},
+	"env": {
+		"browser": true,
+		"node": true,
+		"es2024": true
+	},
+	"ignorePatterns": ["build/**", ".svelte-kit/**", "node_modules/**", "static/**", "coverage/**"],
+	"rules": {
+		"no-console": "off",
+		"eqeqeq": "error",
+		"no-var": "error",
+		"prefer-const": "error",
+		// Sequential awaits are intentional here: the tailer polls CloudWatch Logs one
+		// page at a time, and the seed script writes fixtures and fixtures-only loops in order.
+		"no-await-in-loop": "off",
+		"typescript/no-explicit-any": "warn",
+		"typescript/consistent-type-imports": "warn",
+		"import/no-cycle": "warn",
+		"unicorn/prefer-node-protocol": "error"
+	},
+	"overrides": [
+		{
+			// SvelteKit pulls global CSS in through a side-effect import in +layout.svelte.
+			"files": ["**/*.svelte"],
+			"rules": {
+				"import/no-unassigned-import": "off"
+			}
+		},
+		{
+			// `export {}` is what marks the ambient declaration file as a module.
+			"files": ["**/*.d.ts"],
+			"rules": {
+				"unicorn/require-module-specifiers": "off"
+			}
+		}
+	]
+}
