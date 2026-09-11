@@ -1,5 +1,15 @@
 # watch-tail
 
+## 0.2.0
+
+### Minor Changes
+
+- [#1](https://github.com/antstanley/watch-stream/pull/1) [`bc807a3`](https://github.com/antstanley/watch-stream/commit/bc807a38bbfc4aae92252a3e0871a8a41de556bd) Thanks [@antstanley](https://github.com/antstanley)! - Add a `wt` shorthand for the CLI.
+
+  Installing the package globally now provides `wt` alongside `watch-tail`, so the
+  common case is three characters: `wt --profile my-profile`. Both names run the
+  same binary.
+
 ## 0.1.0
 
 ### Minor Changes
