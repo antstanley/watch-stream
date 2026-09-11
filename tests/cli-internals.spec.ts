@@ -77,6 +77,7 @@ function regionIo(env: NodeJS.ProcessEnv, configText = ''): CliIo {
 		version: '0.0.0',
 		openBrowser: () => undefined,
 		readCredentialsText: () => '',
+		readLocalEnvValues: () => ({}),
 		probeCredentials: async () => ({ ok: true }),
 		runLogin: async () => 0,
 		waitForHealth: async () => true,

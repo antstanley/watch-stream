@@ -17,9 +17,11 @@ import {
 	isLocalEnvPresent,
 	readConfigText,
 	readCredentialsText,
+	readLocalEnvValues,
 	readProfiles,
 	resolveRunRegion,
 	signalExitCode,
+	suppressLocalEnvValues,
 } from '../lib/cli/aws.ts';
 import {
 	classifyCredentialFailure,
@@ -66,6 +68,8 @@ export type CliIo = {
 	openBrowser: (url: string) => void;
 	/** Reads `~/.aws/credentials`. */
 	readCredentialsText: () => string;
+	/** Reads the emulator settings that sit next to the app, if any. */
+	readLocalEnvValues: () => Record<string, string>;
 	/** Asks the running app whether it can reach CloudWatch Logs. */
 	probeCredentials: (input: { baseUrl: string; region: string | null }) => Promise<CredentialProbe>;
 	/** Runs `aws ...` with the terminal attached, so an interactive login works. */
@@ -133,6 +137,7 @@ function defaultIo(): CliIo {
 		version: readVersion(appRoot),
 		openBrowser: (url) => openBrowserDefault(url),
 		readCredentialsText: () => readCredentialsText(),
+		readLocalEnvValues: () => (appRoot === null ? {} : readLocalEnvValues(appRoot)),
 		probeCredentials: (input) => probeCredentialsDefault(input),
 		runLogin: (command) => runLoginDefault(command),
 		waitForHealth,
@@ -265,8 +270,21 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 	// `--profile` wins, then the ambient AWS_PROFILE: the credential check and
 	// the login advice both need to know which profile is actually in play.
 	const profile = options.profile ?? ambientProfile(io.env);
+	let baseEnv = io.env;
+	let suppressedLocalEnv: string[] = [];
+	if (options.endpoint === null) {
+		// The CLI is real-AWS-by-default, so a dev `.env.local` next to the app
+		// (which exists in this repository, and in any checkout of it) must not
+		// silently redirect the run at floci. `--floci` asks for that explicitly.
+		const suppressed = suppressLocalEnvValues({
+			env: io.env,
+			values: io.readLocalEnvValues(),
+		});
+		baseEnv = suppressed.env;
+		suppressedLocalEnv = suppressed.suppressed;
+	}
 	const childEnv = buildChildEnv({
-		base: io.env,
+		base: baseEnv,
 		profile: options.profile,
 		region,
 		endpoint: options.endpoint,
@@ -298,7 +316,11 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 			`binding ${options.host}: the app has no authentication and uses your AWS access, so anyone who can reach it can read your logs`,
 		);
 	}
-	if (isLocalEnvPresent(io.appRoot) && options.profile !== null) {
+	if (suppressedLocalEnv.length > 0) {
+		ui.warn(
+			`ignoring the emulator settings in .env.local (${suppressedLocalEnv.join(', ')}) - pass --floci to use them`,
+		);
+	} else if (isLocalEnvPresent(io.appRoot) && options.profile !== null) {
 		ui.warn('a .env.local with local emulator settings was found; it is ignored for this run');
 	}
 

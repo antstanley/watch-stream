@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseEnvFile, suppressLocalEnvValues } from '../src/lib/cli/aws.ts';
 import {
 	classifyCredentialFailure,
 	describeStyle,
@@ -142,5 +143,59 @@ describe('describeStyle', () => {
 		expect(describeStyle('sso')).toBe('SSO');
 		expect(describeStyle('static')).toBe('static access keys');
 		expect(describeStyle('unconfigured')).toBe('no credentials');
+	});
+});
+
+describe('parseEnvFile', () => {
+	it('reads KEY=value lines, ignoring comments and blanks', () => {
+		const text = [
+			'# floci',
+			'AWS_ENDPOINT_URL=http://localhost.floci.io:4566',
+			'',
+			'AWS_ACCESS_KEY_ID="test"',
+			'',
+		].join('\n');
+
+		expect(parseEnvFile(text)).toEqual({
+			AWS_ENDPOINT_URL: 'http://localhost.floci.io:4566',
+			AWS_ACCESS_KEY_ID: 'test',
+		});
+	});
+
+	it('tolerates export prefixes and single quotes', () => {
+		const text = ["export AWS_REGION='eu-west-1'", 'not a variable'].join('\n');
+
+		expect(parseEnvFile(text)).toEqual({ AWS_REGION: 'eu-west-1' });
+	});
+});
+
+describe('suppressLocalEnvValues', () => {
+	it('blanks emulator keys the file sets and nothing else', () => {
+		const result = suppressLocalEnvValues({
+			env: { PATH: '/usr/bin' },
+			values: { AWS_ENDPOINT_URL: 'http://localhost:4566', AWS_ACCESS_KEY_ID: 'test', NOPE: 'x' },
+		});
+
+		expect(result.env.AWS_ENDPOINT_URL).toBe('');
+		expect(result.env.AWS_ACCESS_KEY_ID).toBe('');
+		expect(result.env.NOPE).toBeUndefined();
+		expect(result.env.PATH).toBe('/usr/bin');
+		expect(result.suppressed).toEqual(['AWS_ENDPOINT_URL', 'AWS_ACCESS_KEY_ID']);
+	});
+
+	it('leaves values the caller already set', () => {
+		const result = suppressLocalEnvValues({
+			env: { AWS_ENDPOINT_URL: 'http://localhost:9999' },
+			values: { AWS_ENDPOINT_URL: 'http://localhost:4566' },
+		});
+
+		expect(result.env.AWS_ENDPOINT_URL).toBe('http://localhost:9999');
+		expect(result.suppressed).toEqual([]);
+	});
+
+	it('never mutates the environment it was given', () => {
+		const env = {};
+		suppressLocalEnvValues({ env, values: { AWS_ENDPOINT_URL: 'x' } });
+		expect(env).toEqual({});
 	});
 });

@@ -280,6 +280,57 @@ export function buildChildEnv({
 	return env;
 }
 
+/**
+ * Parses a dotenv file into a plain map.
+ *
+ * Only `KEY=value` lines are read, with optional single or double quotes; the
+ * values are never applied to the caller's environment.
+ */
+export function parseEnvFile(text: string): Record<string, string> {
+	const values: Record<string, string> = {};
+	for (const raw of text.split('\n')) {
+		const line = raw.trim();
+		if (line.length === 0 || line.startsWith('#')) continue;
+		const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+		if (match === null) continue;
+		const value = match[2].trim().replace(/^(['"])(.*)\1$/, '$2');
+		values[match[1]] = value;
+	}
+	return values;
+}
+
+/** Reads `<appRoot>/.env.local`, or an empty map when it is missing. */
+export function readLocalEnvValues(appRoot: string): Record<string, string> {
+	return parseEnvFile(readTextFile(join(appRoot, LOCAL_ENV_FILE)));
+}
+
+/**
+ * Neutralises a `.env.local` that sits next to the app.
+ *
+ * The app applies that file to its own process (so `pnpm dev` can point at a
+ * local emulator), but the CLI is documented as real-AWS-by-default. A value
+ * from the file is therefore suppressed unless the caller already set the same
+ * key in their environment, which is theirs to decide. Blanking is how "unset"
+ * is expressed: dotenv loading never overrides a variable that exists, and the
+ * SDK ignores empty values.
+ */
+export function suppressLocalEnvValues(input: {
+	env: NodeJS.ProcessEnv;
+	values: Record<string, string>;
+	keys?: readonly string[];
+}): { env: NodeJS.ProcessEnv; suppressed: string[] } {
+	const { env, values, keys = LOCAL_OVERRIDE_KEYS } = input;
+	const next: NodeJS.ProcessEnv = { ...env };
+	const suppressed: string[] = [];
+	for (const key of keys) {
+		if (values[key] === undefined) continue;
+		if (normalize(env[key]) !== null) continue; // the caller's own value wins
+		next[key] = '';
+		suppressed.push(key);
+	}
+	return { env: next, suppressed };
+}
+
 /** True when the endpoint points at a local emulator rather than real AWS. */
 export function isEmulatorEndpoint(endpoint: string): boolean {
 	let hostname = '';
