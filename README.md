@@ -64,7 +64,13 @@ or handing a teammate a link that shows exactly the window you are staring at.
 
 ```bash
 npx watch-tail              # no install
-pnpm add -g watch-tail      # or install once
+pnpm add -g watch-tail      # or install once; `wt` is installed as a shorthand
+```
+
+Installed globally, the command is available as both `watch-tail` and the shorter `wt`:
+
+```bash
+wt --profile my-profile --region af-south-1
 ```
 
 Requires Node 22 or newer (developed and tested on Node 24).

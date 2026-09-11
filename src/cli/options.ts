@@ -182,7 +182,7 @@ export function usageText(): string {
 	return `watch-tail - tail CloudWatch Logs in your browser
 
 Usage
-  watch-tail [options]
+  watch-tail [options]        (also installed as \`wt\`)
 
 Options
   -p, --profile <name>   AWS profile to use (default: ambient credentials)

@@ -23,7 +23,8 @@
 		"url": "git+https://github.com/antstanley/watch-stream.git"
 	},
 	"bin": {
-		"watch-tail": "./dist/cli/bin.js"
+		"watch-tail": "./dist/cli/bin.js",
+		"wt": "./dist/cli/bin.js"
 	},
 	"files": [
 		"dist",

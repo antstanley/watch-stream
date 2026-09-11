@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { PROGRAM, SHELLS, completionScript } from '../src/cli/completions.ts';
 import { readVersion, resolveCliRegion, type CliIo } from '../src/cli/index.ts';
 import { browserCommand, findAppRoot } from '../src/cli/server.ts';
+import manifest from '../package.json' with { type: 'json' };
 import { defaults } from '../src/cli/options.ts';
 
 const created: string[] = [];
@@ -132,5 +133,14 @@ describe('shell completions', () => {
 
 		expect(printed).toContain('watch-tail');
 		expect(printed.length).toBeGreaterThan(100);
+	});
+});
+
+describe('package manifest', () => {
+	it('installs the CLI under both names', () => {
+		expect(Object.keys(manifest.bin).toSorted()).toEqual(['watch-tail', 'wt']);
+		for (const target of Object.values(manifest.bin)) {
+			expect(target).toBe('./dist/cli/bin.js');
+		}
 	});
 });
