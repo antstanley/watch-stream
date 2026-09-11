@@ -1,5 +1,50 @@
 # watch-tail
 
+## 0.4.0
+
+### Minor Changes
+
+- [#11](https://github.com/antstanley/watch-stream/pull/11) [`74ee9c3`](https://github.com/antstanley/watch-stream/commit/74ee9c361d8b2d6e0f3ea38469064d74f90a6116) Thanks [@antstanley](https://github.com/antstanley)! - Open a single log line's JSON on click, and give the app its own icon.
+
+  With pretty-printing switched off, a line that carries JSON shows a marker and
+  opens on click: the raw line stays where it is and the payload appears beneath
+  it, indented and coloured - including for the "prefix then payload" lines
+  CloudWatch often receives. Clicking again, or pressing Enter, closes it. Lines
+  without JSON are not controls, so nothing pretends to be clickable.
+
+  The stock framework icon is replaced with one of our own: a log window with the
+  newest line highlighted.
+
+- [#12](https://github.com/antstanley/watch-stream/pull/12) [`5214ef5`](https://github.com/antstanley/watch-stream/commit/5214ef52336a0b91d4495113349becc0aaac2f90) Thanks [@antstanley](https://github.com/antstanley)! - Check a chosen profile with STS before offering to log it in.
+
+  Picking a profile no longer assumes it needs a login: the CLI restarts with it and
+  asks `sts:GetCallerIdentity` about _that_ profile, so a profile whose SSO session
+  is still cached is simply used - "profile beyond-mzansi already works
+  (AWSReservedSSO_AWSAdministratorAccess) - using it" - instead of prompting for a
+  login anyone would have to cancel. A login is offered only when the chosen
+  profile genuinely has nothing usable, and after a successful login the result is
+  confirmed with STS and reported by role name.
+
+  Adds `GET /api/identity`, which returns the caller identity for the resolved
+  configuration (arn, account, userId, region, endpoint) using the same credentials
+  and endpoint resolution as the log routes.
+
+### Patch Changes
+
+- [#9](https://github.com/antstanley/watch-stream/pull/9) [`7bdd21f`](https://github.com/antstanley/watch-stream/commit/7bdd21f6dcd52e498736c5d7ea2dcd2a1c1ef255) Thanks [@antstanley](https://github.com/antstanley)! - Ask which AWS profile to use when credentials fail, and keep prompts working with NO_COLOR set.
+
+  With several profiles configured, a credential failure assumed the ambient default
+  and offered to log in there - rarely the account someone meant. The CLI now asks
+  which profile to use (a searchable list; skipped when `--profile` or `AWS_PROFILE`
+  already answers it, or when only one profile exists), runs the matching login for
+  it, and restarts the app with that profile and its own region so the browser lands
+  on a working session. Declining still leaves the app running as the chosen profile,
+  with the exact command to run.
+
+  `NO_COLOR` no longer disables prompts. It asks for no colour, and reading it as
+  "do not prompt" silently skipped the profile and login questions for anyone who
+  sets it.
+
 ## 0.3.1
 
 ### Patch Changes
