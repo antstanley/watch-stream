@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { PROGRAM, SHELLS, completionScript } from '../src/cli/completions.ts';
-import { readVersion, resolveCliRegion, type CliIo } from '../src/cli/index.ts';
+import { ambientProfile, readVersion, resolveCliRegion, type CliIo } from '../src/cli/index.ts';
 import { browserCommand, findAppRoot } from '../src/cli/server.ts';
 import manifest from '../package.json' with { type: 'json' };
 import { defaults } from '../src/cli/options.ts';
@@ -76,6 +76,9 @@ function regionIo(env: NodeJS.ProcessEnv, configText = ''): CliIo {
 		appRoot: null,
 		version: '0.0.0',
 		openBrowser: () => undefined,
+		readCredentialsText: () => '',
+		probeCredentials: async () => ({ ok: true }),
+		runLogin: async () => 0,
 		waitForHealth: async () => true,
 		startServerImpl: (() => {
 			throw new Error('not used');
@@ -142,5 +145,15 @@ describe('package manifest', () => {
 		for (const target of Object.values(manifest.bin)) {
 			expect(target).toBe('./dist/cli/bin.js');
 		}
+	});
+});
+
+describe('ambientProfile', () => {
+	it('reads AWS_PROFILE, trimming and treating blanks as absent', () => {
+		expect(ambientProfile({ AWS_PROFILE: 'acme-prod' })).toBe('acme-prod');
+		expect(ambientProfile({ AWS_PROFILE: '  acme-prod  ' })).toBe('acme-prod');
+		expect(ambientProfile({ AWS_PROFILE: '' })).toBeNull();
+		expect(ambientProfile({ AWS_PROFILE: '   ' })).toBeNull();
+		expect(ambientProfile({})).toBeNull();
 	});
 });

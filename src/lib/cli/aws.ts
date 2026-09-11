@@ -214,6 +214,15 @@ export type ChildEnvInput = {
 	 * carries real keys.
 	 */
 	endpoint?: string | null;
+	/**
+	 * Blank just `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
+	 *
+	 * Used when the profile comes from `AWS_PROFILE` in the environment rather
+	 * than from `--profile`: a stray static key pair (a `.env.local`, a stale
+	 * export) would otherwise make the SDK warn about conflicting sources, and
+	 * the user's chosen profile is what they meant.
+	 */
+	clearStaticKeys?: boolean;
 };
 
 /** Throwaway credentials local emulators accept; floci never checks them. */
@@ -235,6 +244,7 @@ export function buildChildEnv({
 	profile = null,
 	region = null,
 	endpoint = null,
+	clearStaticKeys = false,
 }: ChildEnvInput): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...base };
 	const name = normalize(profile);
@@ -243,6 +253,11 @@ export function buildChildEnv({
 	if (name !== null) {
 		env.AWS_PROFILE = name;
 		for (const key of [...LOCAL_OVERRIDE_KEYS, ...REGION_KEYS]) env[key] = '';
+	}
+
+	if (name === null && clearStaticKeys) {
+		env.AWS_ACCESS_KEY_ID = '';
+		env.AWS_SECRET_ACCESS_KEY = '';
 	}
 
 	if (emulator !== null) {
@@ -299,6 +314,11 @@ export function describeChildEnv(env: NodeJS.ProcessEnv): string[] {
 /** Reads the shared AWS config file, or an empty string when it is missing. */
 export function readConfigText(env: NodeJS.ProcessEnv = process.env): string {
 	return readTextFile(profileFiles(env).configFile);
+}
+
+/** Reads the shared credentials file, or an empty string when it is missing. */
+export function readCredentialsText(env: NodeJS.ProcessEnv = process.env): string {
+	return readTextFile(profileFiles(env).credentialsFile);
 }
 
 /** True when `.env.local` (the floci settings) exists in the repository root. */
