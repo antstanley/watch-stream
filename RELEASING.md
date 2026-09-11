@@ -115,3 +115,21 @@ npm publish --ignore-scripts --access public
 ```
 
 Never commit an npm token, and never add one to this repository's secrets.
+
+## Troubleshooting
+
+Two failures showed up the first time this pipeline ran for real, and both are fixed in
+`.github/workflows/release.yml`. They are worth knowing about:
+
+- **`changeset git-tag` reports a tag but the push finds no ref.** The runner starts without a git
+  identity, and tag creation needs one; changesets reported success while the tag was never written.
+  The tag job now configures a bot identity, verifies the tag exists (creating it directly if
+  changesets did not) and pushes only when the remote is missing it.
+- **A re-run tries to stage the version that is already staged.** The publish step treats
+  "already staged"/"already published" as a notice rather than a failure, because that version is
+  simply waiting for approval.
+
+If the `Version PR` workflow fails with _"GitHub Actions is not permitted to create or approve pull
+requests"_, the repository setting is off: **Settings → Actions → General → Workflow permissions →
+Allow GitHub Actions to create and approve pull requests**. The default workflow permission should
+stay read-only; only this workflow asks for more.
