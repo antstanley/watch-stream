@@ -178,6 +178,10 @@ floci start
 npx watch-tail --floci             # throwaway credentials are supplied automatically
 ```
 
+`--floci` is the only thing that points the CLI at an emulator. If an `.env.local` next to the app
+sets `AWS_ENDPOINT_URL` - as this repository's `pnpm floci:up` writes for the dev server - the CLI
+ignores it, says so, and runs against real AWS; your own exported variables always win over that file.
+
 ## Development
 
 ```bash

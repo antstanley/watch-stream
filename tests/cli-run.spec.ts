@@ -57,6 +57,7 @@ function harness(overrides: Partial<CliIo> = {}): Harness {
 		version: '1.2.3',
 		openBrowser: (url) => opened.push(url),
 		readCredentialsText: () => overrides.readCredentialsText?.() ?? '',
+		readLocalEnvValues: () => overrides.readLocalEnvValues?.() ?? {},
 		probeCredentials: (input) =>
 			(overrides.probeCredentials ?? (async () => ({ ok: true })))(input),
 		runLogin: (command) => (overrides.runLogin ?? (async () => 0))(command),
@@ -300,5 +301,52 @@ describe('run: credential preflight', () => {
 
 		expect(h.probeCalls()).toBe(0);
 		expect(h.ui.asked).toEqual([]);
+	});
+});
+
+describe("run: the app's .env.local", () => {
+	const LOCAL_ENV = {
+		AWS_ENDPOINT_URL: 'http://localhost.floci.io:4566',
+		AWS_ACCESS_KEY_ID: 'test',
+		AWS_SECRET_ACCESS_KEY: 'test',
+	};
+
+	it('does not let a dev .env.local redirect a normal run at the emulator', async () => {
+		const h = harness({ readLocalEnvValues: () => LOCAL_ENV });
+
+		expect(await run(['--no-open'], h.io)).toBe(0);
+
+		const env = h.started[0].env;
+		expect(env.AWS_ENDPOINT_URL).toBe('');
+		expect(env.AWS_ACCESS_KEY_ID).toBe('');
+		expect(h.ui.lines.join('\n')).toContain('ignoring the emulator settings in .env.local');
+	});
+
+	it('keeps the emulator settings when --floci asks for them', async () => {
+		const h = harness({ readLocalEnvValues: () => LOCAL_ENV });
+
+		expect(await run(['--floci', '--no-open'], h.io)).toBe(0);
+
+		const env = h.started[0].env;
+		expect(env.AWS_ENDPOINT_URL).toBe('http://localhost:4566');
+		expect(env.AWS_ACCESS_KEY_ID).toBe('test');
+		expect(h.ui.lines.join('\n')).not.toContain('ignoring the emulator settings');
+	});
+
+	it('lets an exported variable win over the file', async () => {
+		const h = harness({ readLocalEnvValues: () => LOCAL_ENV });
+		h.io.env = { ...h.io.env, AWS_ENDPOINT_URL: 'http://localhost:9999' };
+
+		await run(['--no-open'], h.io);
+
+		expect(h.started[0].env.AWS_ENDPOINT_URL).toBe('http://localhost:9999');
+	});
+
+	it('says nothing when there is no .env.local', async () => {
+		const h = harness();
+
+		await run(['--no-open'], h.io);
+
+		expect(h.ui.lines.join('\n')).not.toContain('ignoring the emulator settings');
 	});
 });
