@@ -68,6 +68,22 @@ jobs:
   browser:
     name: Browser smoke
     runs-on: ubuntu-latest
+    services:
+      floci:
+        image: floci/floci:latest
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -fsS http://localhost:4566/ || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -79,12 +95,22 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      # Playwright's own Chromium (the CLI defaults to Google Chrome, which CI
-      # does not have, so the smoke run asks for `chromium` explicitly).
+      - run: node scripts/seed-floci.ts
+      # Playwright's own Chromium: the CLI defaults to Google Chrome, which CI
+      # does not have, so the smoke run asks for `chromium` explicitly.
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm dev --port 5173 --strictPort > /tmp/dev.log 2>&1 &
-      - run: npx --yes wait-on http://localhost:5173/api/health --timeout 60000
-      - run: node scripts/ui-smoke.ts --url http://localhost:5173 --channel chromium
+      - name: Start the app, then smoke it
+        # The server has to live in the same step as the checks: a background
+        # process from an earlier step is killed when that step ends.
+        run: |
+          pnpm dev --port 5173 --strictPort > /tmp/dev.log 2>&1 &
+          DEV_PID=$!
+          npx --yes wait-on http://localhost:5173/api/health --timeout 60000
+          STATUS=0
+          node scripts/ui-smoke.ts --url http://localhost:5173 --region us-east-1 \
+            --group /aws/lambda/checkout-api --channel chromium || STATUS=$?
+          kill "${DEV_PID}" 2>/dev/null || true
+          exit "${STATUS}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:

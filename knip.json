@@ -3,7 +3,7 @@
 	"entry": ["src/routes/**/+*.{svelte,ts,js}", "scripts/*.ts", "src/cli/bin.ts"],
 	"project": ["src/**/*.{ts,svelte}", "scripts/**/*.ts", "*.config.ts"],
 	"ignoreDependencies": ["tailwindcss"],
-	"ignoreBinaries": ["floci", "publint"],
+	"ignoreBinaries": ["floci"],
 	"vitest": {
 		"entry": ["src/**/*.{test,spec}.{ts,js}"]
 	}
