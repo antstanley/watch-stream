@@ -155,7 +155,16 @@ signed in - credentials work now
 
 If you did not name a profile and you have more than one, it asks which one first. The answer decides
 both the login and the profile the app runs with, so a chosen profile is applied by restarting the
-server with it (and with that profile's own region):
+server with it (and with that profile's own region). **A profile that already works is never sent to a
+login prompt**: the CLI asks `sts:GetCallerIdentity` about the chosen profile first, and only offers a
+login when that profile really has nothing usable.
+
+```text
+? Which AWS profile should watch-tail use?  (type to search, then Enter)
+using profile beyond-mzansi
+restarting with profile beyond-mzansi
+profile beyond-mzansi already works (AWSReservedSSO_AWSAdministratorAccess) - using it
+```
 
 ```text
 ? Which AWS profile should watch-tail use?  (type to search, then Enter)

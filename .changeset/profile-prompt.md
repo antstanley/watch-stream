@@ -1,5 +1,5 @@
 ---
-"watch-tail": patch
+'watch-tail': patch
 ---
 
 Ask which AWS profile to use when credentials fail, and keep prompts working with NO_COLOR set.

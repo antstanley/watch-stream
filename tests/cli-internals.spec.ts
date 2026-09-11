@@ -80,6 +80,7 @@ function regionIo(env: NodeJS.ProcessEnv, configText = ''): CliIo {
 		readLocalEnvValues: () => ({}),
 		probeCredentials: async () => ({ ok: true }),
 		runLogin: async () => 0,
+		readIdentity: async () => ({ ok: false, message: 'unavailable' }),
 		waitForHealth: async () => true,
 		startServerImpl: (() => {
 			throw new Error('not used');

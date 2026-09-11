@@ -72,6 +72,8 @@ function harness(overrides: Partial<CliIo> = {}): Harness {
 		probeCredentials: (input) =>
 			(overrides.probeCredentials ?? (async () => ({ ok: true })))(input),
 		runLogin: (command) => (overrides.runLogin ?? (async () => 0))(command),
+		readIdentity: (input) =>
+			(overrides.readIdentity ?? (async () => ({ ok: false, message: 'unavailable' })))(input),
 		waitForHealth: async () => true,
 		startServerImpl: ((input) => {
 			started.push({ env: input.env, port: input.port, host: input.host });
@@ -216,6 +218,30 @@ describe('run: completions', () => {
 	});
 });
 
+/** Fake STS identity that starts broken and starts working once a login runs. */
+function identityState(initial: 'broken' | 'works', loginFixes = true) {
+	const state = { works: initial === 'works' };
+	return {
+		state,
+		read: () =>
+			state.works
+				? {
+						ok: true as const,
+						identity: {
+							arn: 'arn:aws:sts::111111111111:assumed-role/AWSResolvedSSO_Admin/me',
+							account: '111111111111',
+							userId: 'AROAEXAMPLE:me',
+							region: 'af-south-1',
+							endpoint: null,
+						},
+					}
+				: { ok: false as const, code: 'missing-credentials', message: 'no usable credentials' },
+		login: () => {
+			if (loginFixes) state.works = true;
+		},
+	};
+}
+
 describe('run: credential preflight', () => {
 	const SSO_CONFIG = '[profile acme-prod]\nsso_session = acme\nregion = eu-west-1\n';
 
@@ -224,6 +250,7 @@ describe('run: credential preflight', () => {
 		probeResults: Awaited<ReturnType<NonNullable<CliIo['probeCredentials']>>>[];
 		answers?: boolean[];
 		loginCode?: number;
+		identity?: ReturnType<typeof identityState>;
 	}) {
 		const h = harness({
 			readConfigText: () => SSO_CONFIG,
@@ -238,11 +265,15 @@ describe('run: credential preflight', () => {
 			call += 1;
 			return result;
 		};
+		const identity = options.identity ?? identityState('broken');
+		h.io.readIdentity = async () => identity.read();
 		h.io.runLogin = async (command) => {
 			logins.push(command);
-			return options.loginCode ?? 0;
+			const code = options.loginCode ?? 0;
+			if (code === 0) identity.login();
+			return code;
 		};
-		return { ...h, ui, logins, probeCalls: () => call };
+		return { ...h, ui, logins, identity, probeCalls: () => call };
 	}
 
 	const failure = {
@@ -260,8 +291,10 @@ describe('run: credential preflight', () => {
 
 		expect(h.logins).toEqual([['sso', 'login', '--profile', 'acme-prod']]);
 		expect(h.ui.asked.join(' ')).toContain('aws sso login --profile acme-prod');
-		expect(h.ui.lines.join('\n')).toContain('signed in');
-		expect(h.probeCalls()).toBe(2);
+		// the result is confirmed with STS rather than another log query
+		expect(h.ui.lines.join('\n')).toContain('signed in as AWSResolvedSSO_Admin');
+		expect(h.identity.state.works).toBe(true);
+		expect(h.probeCalls()).toBe(1);
 	});
 
 	it('prints the command instead of running it when declined', async () => {
@@ -283,11 +316,14 @@ describe('run: credential preflight', () => {
 	});
 
 	it('reports credentials that still fail after logging in', async () => {
-		const h = credentialHarness({ probeResults: [failure, failure] });
+		const h = credentialHarness({
+			probeResults: [failure],
+			identity: identityState('broken', false),
+		});
 
 		expect(await run(['--profile', 'acme-prod', '--no-open'], h.io)).toBe(0);
 
-		expect(h.ui.lines.join('\n')).toContain('still failing after login');
+		expect(h.ui.lines.join('\n')).toContain('still failing after login: no usable credentials');
 	});
 
 	it('does not offer a login when the API fails for another reason', async () => {
@@ -394,6 +430,7 @@ describe('run: choosing a profile when credentials fail', () => {
 		confirm?: boolean[];
 		profiles?: string[];
 		probes?: Awaited<ReturnType<NonNullable<CliIo['probeCredentials']>>>[];
+		identity?: ReturnType<typeof identityState>;
 	}) {
 		const h = harness({
 			readConfigText: () => CONFIG,
@@ -409,11 +446,14 @@ describe('run: choosing a profile when credentials fail', () => {
 			call += 1;
 			return result;
 		};
+		const identity = options.identity ?? identityState('broken');
+		h.io.readIdentity = async () => identity.read();
 		h.io.runLogin = async (command) => {
 			logins.push(command);
+			identity.login();
 			return 0;
 		};
-		return { ...h, ui, logins };
+		return { ...h, ui, logins, identity };
 	}
 
 	it('asks which profile to use and logs in with the one chosen', async () => {
@@ -426,7 +466,7 @@ describe('run: choosing a profile when credentials fail', () => {
 		// the app is restarted so it actually runs as that profile
 		expect(h.started).toHaveLength(2);
 		expect(h.started[1].env.AWS_PROFILE).toBe('acme-prod');
-		expect(h.ui.lines.join('\n')).toContain('signed in as acme-prod');
+		expect(h.ui.lines.join('\n')).toContain('signed in as AWSResolvedSSO_Admin (acme-prod)');
 	});
 
 	it('keeps the default profile when that is what the user picks', async () => {
@@ -436,7 +476,7 @@ describe('run: choosing a profile when credentials fail', () => {
 
 		expect(h.logins).toEqual([['login']]);
 		expect(h.started).toHaveLength(1);
-		expect(h.ui.lines.join('\n')).toContain('signed in');
+		expect(h.ui.lines.join('\n')).toContain('signed in as AWSResolvedSSO_Admin');
 	});
 
 	it('does not ask when only one profile exists', async () => {
@@ -468,11 +508,12 @@ describe('run: choosing a profile when credentials fail', () => {
 	});
 
 	it('reports a profile that still fails after logging in', async () => {
-		const h = profileHarness({ choose: ['acme-prod'], probes: [failure, failure] });
+		const identity = identityState('broken', false);
+		const h = profileHarness({ choose: ['acme-prod'], probes: [failure], identity });
 
 		expect(await run(['--no-open'], h.io)).toBe(0);
 
-		expect(h.ui.lines.join('\n')).toContain('still failing with profile acme-prod');
+		expect(h.ui.lines.join('\n')).toContain('still failing after login: no usable credentials');
 	});
 });
 
@@ -508,5 +549,66 @@ describe('run: declining the login after choosing a profile', () => {
 		expect(ui.lines.join('\n')).not.toContain('still failing');
 		// declined: nothing is probed a second time
 		expect(probes).toBe(1);
+	});
+});
+
+describe('run: the chosen profile may already work', () => {
+	const failure = {
+		ok: false as const,
+		code: 'missing-credentials',
+		message: 'Your session has expired. Please reauthenticate.',
+		credentialProblem: true,
+	};
+	const IDENTITY = {
+		arn: 'arn:aws:sts::111111111111:assumed-role/AWSResolvedSSO_Admin/me',
+		account: '111111111111',
+		userId: 'AROAEXAMPLE:me',
+		region: 'af-south-1',
+		endpoint: null,
+	};
+
+	/** A failing probe plus a profile picker, with STS answering for the choice. */
+	function harnessForIdentity(identity: Awaited<ReturnType<NonNullable<CliIo['readIdentity']>>>) {
+		const h = harness({
+			readConfigText: () => '[profile beyond-mzansi]\nsso_session = x\nregion = af-south-1\n',
+			readProfiles: () => ['default', 'beyond-mzansi'],
+			readIdentity: async () => identity,
+		});
+		const ui = recorder({ confirm: [true], choose: ['beyond-mzansi'] });
+		h.io.ui = ui;
+		h.io.probeCredentials = async () => failure;
+		const logins: string[][] = [];
+		h.io.runLogin = async (command) => {
+			logins.push(command);
+			return 0;
+		};
+		return { ...h, ui, logins };
+	}
+
+	it('skips the login when that profile already has usable credentials', async () => {
+		const h = harnessForIdentity({ ok: true, identity: IDENTITY });
+
+		expect(await run(['--no-open'], h.io)).toBe(0);
+
+		expect(h.logins).toEqual([]);
+		expect(h.ui.asked.join(' ')).not.toContain('Run `aws sso login');
+		expect(h.ui.lines.join('\n')).toContain('already works (AWSResolvedSSO_Admin)');
+		// and the app runs as that profile
+		expect(h.started).toHaveLength(2);
+		expect(h.started[1].env.AWS_PROFILE).toBe('beyond-mzansi');
+	});
+
+	it('offers the login when that profile has nothing usable', async () => {
+		const h = harnessForIdentity({
+			ok: false,
+			code: 'missing-credentials',
+			message: 'The SSO session token associated with profile=beyond-mzansi was not found',
+		});
+
+		expect(await run(['--no-open'], h.io)).toBe(0);
+
+		expect(h.logins).toEqual([['sso', 'login', '--profile', 'beyond-mzansi']]);
+		expect(h.ui.asked.join(' ')).toContain('aws sso login --profile beyond-mzansi');
+		expect(h.ui.lines.join('\n')).not.toContain('already works');
 	});
 });

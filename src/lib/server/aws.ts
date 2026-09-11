@@ -2,6 +2,7 @@ import {
 	CloudWatchLogsClient,
 	type CloudWatchLogsClientConfig,
 } from '@aws-sdk/client-cloudwatch-logs';
+import { STSClient, type STSClientConfig } from '@aws-sdk/client-sts';
 
 /** Where the client takes its credentials from. */
 export type CredentialsSource = 'ambient' | 'emulator-default';
@@ -164,8 +165,11 @@ export function createLogsClient(config: AwsConfig): CloudWatchLogsClient {
  * {@link FALLBACK_REGION}: this value is informational and must never break a
  * response.
  */
+/** Anything with a resolvable region provider: the Logs and STS clients both qualify. */
+export type RegionProvider = { config: { region: () => Promise<string> } };
+
 export async function resolveEffectiveRegion(
-	client: CloudWatchLogsClient,
+	client: RegionProvider,
 	config: AwsConfig,
 ): Promise<string> {
 	if (config.region !== null) return config.region;
@@ -362,4 +366,17 @@ export function describeAwsError(error: unknown): { message: string; code?: stri
 			? `${base}: ${detail}`
 			: base;
 	return { message, code };
+}
+
+/**
+ * Creates an STS client with the same resolved settings as the Logs client.
+ *
+ * Used for `GetCallerIdentity`, which answers the question the UI cannot: whose
+ * credentials are these, if they work at all.
+ */
+export function createStsClient(config: AwsConfig): STSClient {
+	const options: STSClientConfig = { region: config.region ?? undefined, maxAttempts: 2 };
+	if (config.endpoint !== null) options.endpoint = config.endpoint;
+	if (config.credentials === 'emulator-default') options.credentials = EMULATOR_CREDENTIALS;
+	return new STSClient(options);
 }
