@@ -156,3 +156,58 @@ export function tokenizeJson(text: string): JsonToken[] {
 
 	return tokens;
 }
+
+/**
+ * Finds the first JSON object or array inside a log message.
+ *
+ * Whole messages are handled by {@link detectJson}; this also copes with the
+ * common "prefix then payload" shape (`2026-01-01 INFO {"level":"info"}`), which
+ * is what the viewer expands when pretty-printing is switched off.
+ *
+ * Strings and escapes are respected while matching brackets, so a `}` inside a
+ * message value cannot end the scan early.
+ */
+export function findJsonInMessage(message: string): unknown | null {
+	if (typeof message !== 'string') return null;
+	const whole = detectJson(message);
+	if (whole !== null) return whole;
+
+	for (let index = 0; index < message.length; index += 1) {
+		const opener = message[index];
+		if (opener !== '{' && opener !== '[') continue;
+
+		const closer = opener === '{' ? '}' : ']';
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+
+		for (let scan = index; scan < message.length; scan += 1) {
+			const char = message[scan];
+			if (inString) {
+				if (escaped) escaped = false;
+				else if (char === '\\') escaped = true;
+				else if (char === '"') inString = false;
+				continue;
+			}
+			if (char === '"') {
+				inString = true;
+				continue;
+			}
+			if (char === opener) depth += 1;
+			else if (char === closer) {
+				depth -= 1;
+				if (depth === 0) {
+					const candidate = message.slice(index, scan + 1);
+					try {
+						const parsed: unknown = JSON.parse(candidate);
+						if (parsed !== null && typeof parsed === 'object') return parsed;
+					} catch {
+						// Not JSON after all: keep scanning for the next opener.
+					}
+					break;
+				}
+			}
+		}
+	}
+	return null;
+}

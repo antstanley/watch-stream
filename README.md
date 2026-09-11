@@ -36,7 +36,9 @@ work for every line.
   with the full value on hover - so a 95-character Lambda stream name cannot push your message off
   screen.
 - **Logs arrive as payloads, not prose.** JSON entries are pretty-printed with syntax colouring by
-  default, and one toggle shows the raw line when you need the wire format.
+  default, and one toggle shows the raw line when you need the wire format. With that toggle off,
+  **click a line that carries JSON** and just that payload opens beneath it - indented, coloured, and
+  without losing the raw line - and clicking again closes it.
 - **"What happened an hour ago?" is the normal question.** Flip to **Historic** and scan 15 min, 1 h,
   3 h, 12 h, 24 h, 5 days - or pick a custom `from`/`to` window. The scan finishes on its own and the
   window lives in the URL, so `…&mode=historic&range=24h` is a shareable view of an incident.
@@ -54,8 +56,9 @@ or handing a teammate a link that shows exactly the window you are staring at.
 - **Region-first UI** - pick a region, see its log groups (with stored size), click one to stream.
 - **Live and historic** - follow new events over SSE, or scan a fixed window up to the 14 days
   CloudWatch Logs keeps.
-- **A log window built for real logs** - horizontal scrolling or wrapping, JSON pretty-printing,
-  drag-resizable stream-name column and group-list pane, level colouring, pause/clear/auto-scroll.
+- **A log window built for real logs** - horizontal scrolling or wrapping, JSON pretty-printing with
+  click-to-open payloads, drag-resizable stream-name column and group-list pane, level colouring,
+  pause/clear/auto-scroll.
 - **Shareable views** - region, group, mode and window all live in the URL.
 - **Local emulation friendly** - `--floci` points at [floci](https://floci.io) on port 4566 for
   development without an AWS account.
