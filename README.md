@@ -94,11 +94,20 @@ watch-tail [options]
   -v, --version          Show the version
 ```
 
-Shell completions come from [`@bomb.sh/tab`](https://bomb.sh):
+Shell completions come from [`@bomb.sh/tab`](https://bomb.sh): flags, `--region` values from the
+CloudWatch Logs region list, and `--profile` values from your own `~/.aws/config`. zsh, bash, fish and
+powershell are supported.
 
 ```bash
-source <(watch-tail complete zsh)     # zsh; bash, fish and powershell too
+source <(watch-tail complete zsh)                       # this shell, now
+watch-tail complete zsh > ~/.watch-tail-completion.zsh  # or install it permanently
+echo 'source ~/.watch-tail-completion.zsh' >> ~/.zshrc
 ```
+
+The generated script re-invokes `watch-tail complete -- <words>`, so completions keep working after
+you upgrade. Install the [`@bomb.sh/tab`](https://www.npmjs.com/package/@bomb.sh/tab) CLI globally if
+you also want completions for a locally installed copy through your package manager
+(`pnpm watch-tail <TAB>`).
 
 `--profile` sets `AWS_PROFILE` for the server process only. Nothing is written to disk, and any local
 emulator settings are neutralized for that run, so a stray `.env.local` cannot redirect a real AWS run.
