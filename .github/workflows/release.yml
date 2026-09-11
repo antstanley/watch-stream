@@ -127,11 +127,22 @@ jobs:
           set -euo pipefail
           # Auth is GitHub OIDC trusted publishing (id-token: write plus
           # registry-url); --provenance attests the build to this commit.
+          STATUS=0
           for tarball in $(find "${RUNNER_TEMP}/packed" -name '*.tgz'); do
             echo "Staging ${tarball}"
             npm stage publish --provenance --access public --ignore-scripts \
-              --tag "${DIST_TAG}" "${tarball}" 2>&1 | tee -a "${RUNNER_TEMP}/staged.log"
+              --tag "${DIST_TAG}" "${tarball}" 2>&1 | tee -a "${RUNNER_TEMP}/staged.log" || STATUS=$?
           done
+          if [ "${STATUS}" -ne 0 ]; then
+            # A version that is already staged (or already published) is not a
+            # failure: the release is waiting for its approval, or a human beat
+            # us to it. Anything else fails the run.
+            if grep -qiE 'already staged|already exists|already published|409' "${RUNNER_TEMP}/staged.log"; then
+              echo "::notice::this version is already staged or published; nothing to do"
+              exit 0
+            fi
+            exit "${STATUS}"
+          fi
       - name: Summarise
         run: |
           set -euo pipefail
@@ -161,6 +172,13 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Configure git
+        # Creating a tag needs an identity. Without one, `changeset git-tag`
+        # swallows the failure and the following push finds no ref, which is
+        # exactly how the first release run failed.
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Create the tag and GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -168,12 +186,27 @@ jobs:
         run: |
           set -euo pipefail
           # `changeset git-tag` writes the canonical tag for the current version
-          # (v0.1.0 for a single package), so the tag always matches what was
+          # (v0.2.0 for a single package), so the tag always matches what was
           # staged.
           pnpm exec changeset git-tag
-          git push origin "v${VERSION}"
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --generate-notes \
-            --notes "Staged to npm by the release workflow. Approve the staged package to make it live:
+
+          if ! git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "changeset git-tag did not create v${VERSION}; creating it directly"
+            git tag --annotate "v${VERSION}" --message "watch-tail ${VERSION}"
+          fi
+
+          if [ -z "$(git ls-remote --tags origin "refs/tags/v${VERSION}")" ]; then
+            git push origin "refs/tags/v${VERSION}"
+          else
+            echo "v${VERSION} is already on the remote"
+          fi
+
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "release v${VERSION} already exists"
+          else
+            gh release create "v${VERSION}" \
+              --title "v${VERSION}" \
+              --generate-notes \
+              --notes "Staged to npm by the release workflow. Approve the staged package to make it live:
           https://www.npmjs.com/settings/~/staged-packages"
+          fi
