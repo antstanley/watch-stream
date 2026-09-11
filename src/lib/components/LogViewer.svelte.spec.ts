@@ -289,3 +289,98 @@ describe('LogViewer window chip', () => {
 		expect(screen.queryByTestId('window-complete')).toBeNull();
 	});
 });
+
+/** Renders the viewer with pretty-printing off, which is when lines become expandable. */
+async function renderWithJsonOff(lines: LogEventDto[]) {
+	render(LogViewer, { props: { lines, group: '/aws/app' } });
+	await fireEvent.click(screen.getByTestId('json-toggle'));
+	return screen.getAllByTestId('log-line');
+}
+
+describe('LogViewer expandable JSON lines', () => {
+	const JSON_LINE: LogEventDto = {
+		id: 'j1',
+		timestamp: Date.UTC(2024, 0, 2, 3, 4, 5, 678),
+		message: '{"level":"info","order":{"id":"ord_1"}}',
+		streamName: 'stream-1',
+	};
+	const PREFIXED_LINE: LogEventDto = {
+		id: 'j2',
+		timestamp: Date.UTC(2024, 0, 2, 3, 4, 6, 0),
+		message: '2026-01-01 INFO {"level":"warn","msg":"slow"}',
+		streamName: 'stream-2',
+	};
+	const PLAIN_LINE: LogEventDto = {
+		id: 'j3',
+		timestamp: Date.UTC(2024, 0, 2, 3, 4, 7, 0),
+		message: 'START RequestId: 8f2c Version: $LATEST',
+		streamName: 'stream-3',
+	};
+
+	it('marks only lines that carry JSON as expandable', async () => {
+		const rows = await renderWithJsonOff([JSON_LINE, PREFIXED_LINE, PLAIN_LINE]);
+
+		expect(rows[0].dataset.expandable).toBe('true');
+		expect(rows[1].dataset.expandable).toBe('true');
+		expect(rows[2].dataset.expandable).toBeUndefined();
+		expect(rows[2].getAttribute('role')).toBeNull();
+	});
+
+	it('shows a line as JSON when clicked, and closes it when clicked again', async () => {
+		const rows = await renderWithJsonOff([JSON_LINE, PLAIN_LINE]);
+
+		expect(screen.queryByTestId('log-json-expanded')).toBeNull();
+		expect(rows[0].getAttribute('aria-expanded')).toBe('false');
+
+		await fireEvent.click(rows[0]);
+
+		const expanded = screen.getByTestId('log-json-expanded');
+		expect(expanded.textContent).toContain('{\n  "level": "info",');
+		expect(rows[0].getAttribute('aria-expanded')).toBe('true');
+		expect(rows[0].dataset.expanded).toBe('true');
+		// the raw line stays visible above the parsed block
+		expect(screen.getAllByTestId('log-message')[0].textContent).toBe(JSON_LINE.message);
+
+		await fireEvent.click(rows[0]);
+
+		expect(screen.queryByTestId('log-json-expanded')).toBeNull();
+		expect(rows[0].getAttribute('aria-expanded')).toBe('false');
+	});
+
+	it('extracts the payload from a line with a prefix, leaving the rest out', async () => {
+		const rows = await renderWithJsonOff([PREFIXED_LINE]);
+
+		await fireEvent.click(rows[0]);
+
+		const expanded = screen.getByTestId('log-json-expanded');
+		expect(expanded.textContent).toContain('"level": "warn"');
+		expect(expanded.textContent).not.toContain('2026-01-01');
+	});
+
+	it('opens and closes with the keyboard', async () => {
+		const rows = await renderWithJsonOff([JSON_LINE]);
+
+		await fireEvent.keyDown(rows[0], { key: 'Enter' });
+		expect(screen.getByTestId('log-json-expanded')).toBeTruthy();
+
+		await fireEvent.keyDown(rows[0], { key: ' ' });
+		expect(screen.queryByTestId('log-json-expanded')).toBeNull();
+	});
+
+	it('does nothing when a line without JSON is clicked', async () => {
+		const rows = await renderWithJsonOff([PLAIN_LINE]);
+
+		await fireEvent.click(rows[0]);
+
+		expect(screen.queryByTestId('log-json-expanded')).toBeNull();
+	});
+
+	it('leaves lines alone while pretty-printing is on', () => {
+		render(LogViewer, { props: { lines: [JSON_LINE], group: '/aws/app' } });
+
+		const row = screen.getAllByTestId('log-line')[0];
+		expect(row.dataset.expandable).toBeUndefined();
+		// pretty-printed inline instead, so there is nothing to expand
+		expect(screen.getByTestId('log-message').textContent).toContain('{\n  "level": "info",');
+	});
+});

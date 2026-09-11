@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { detectJson, formatLogMessage, tokenizeJson } from './log-format';
+import { detectJson, findJsonInMessage, formatLogMessage, tokenizeJson } from './log-format';
 
 describe('detectJson', () => {
 	test('accepts objects and arrays', () => {
@@ -116,5 +116,48 @@ describe('tokenizeJson', () => {
 					.join(''),
 			).toBe(text);
 		}
+	});
+});
+
+describe('findJsonInMessage', () => {
+	test('finds a whole-message payload', () => {
+		expect(findJsonInMessage('{"level":"info"}')).toEqual({ level: 'info' });
+		expect(findJsonInMessage('  [1,2]  ')).toEqual([1, 2]);
+	});
+
+	test('finds a payload after a prefix, as CloudWatch lines often carry', () => {
+		expect(findJsonInMessage('2026-01-01 INFO {"level":"info","msg":"ok"}')).toEqual({
+			level: 'info',
+			msg: 'ok',
+		});
+		expect(findJsonInMessage('REPORT RequestId: abc {"duration":12}\tMemory: 512 MB')).toEqual({
+			duration: 12,
+		});
+	});
+
+	test('is not fooled by braces or brackets inside strings', () => {
+		expect(findJsonInMessage('log {"msg":"a } brace","nested":{"ok":true}}')).toEqual({
+			msg: 'a } brace',
+			nested: { ok: true },
+		});
+		expect(findJsonInMessage('log {"path":"C:\\\\temp","quoted":"say \\"hi\\""}')).toEqual({
+			path: 'C:\\temp',
+			quoted: 'say "hi"',
+		});
+	});
+
+	test('skips text that only looks like JSON', () => {
+		expect(findJsonInMessage('START RequestId: 8f2c Version: $LATEST')).toBeNull();
+		expect(findJsonInMessage('{not json} then {"ok":1}')).toEqual({ ok: 1 });
+		expect(findJsonInMessage('')).toBeNull();
+		expect(findJsonInMessage('handler raised ValueError: {broken')).toBeNull();
+	});
+
+	test('returns the first parsable payload', () => {
+		expect(findJsonInMessage('id=1 {"first":true} {"second":true}')).toEqual({ first: true });
+	});
+
+	test('ignores JSON scalars', () => {
+		expect(findJsonInMessage('count 42')).toBeNull();
 	});
 });

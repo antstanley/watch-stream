@@ -299,6 +299,38 @@ async function main(): Promise<number> {
 					: `${pretty.total} JSON lines: pretty=${pretty.multiline}, raw=${raw.multiline}`,
 			);
 			check(checks, 'json toggle reports its state', rawToggle === 'false', String(rawToggle));
+
+			// Still with pretty-printing off, a line that carries JSON opens on click.
+			const expandable = page.locator('[data-testid="log-line"][data-expandable="true"]');
+			const expandableCount = await expandable.count();
+			if (expandableCount === 0) {
+				check(checks, 'JSON lines expand on click', true, 'no JSON lines in this group');
+			} else {
+				const target = expandable.first();
+				await target.click();
+				const opened = await page.locator('[data-testid="log-json-expanded"]').count();
+				const expandedText =
+					opened > 0
+						? await page.locator('[data-testid="log-json-expanded"]').first().textContent()
+						: '';
+				await target.click();
+				const closed = await page.locator('[data-testid="log-json-expanded"]').count();
+				check(
+					checks,
+					'JSON lines expand on click',
+					opened === 1 && (expandedText ?? '').includes('\n') && closed === 0,
+					`${expandableCount} expandable, opened=${opened}, closed=${closed}`,
+				);
+			}
+			// and a line without JSON is not a control
+			check(
+				checks,
+				'plain lines are not clickable',
+				(await page
+					.locator('[data-testid="log-line"]:not([data-expandable="true"])[aria-expanded]')
+					.count()) === 0,
+			);
+			// back to pretty-printed lines for the remaining checks
 			await page.click('[data-testid="json-toggle"]');
 
 			const scrollerBox = await page.locator('[data-testid="log-scroller"]').boundingBox();

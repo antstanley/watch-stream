@@ -6,7 +6,7 @@
 	import { describeStreamError } from '$lib/groups-client';
 	import { detectLevel, eventKey, filterEvents, levelColorClass } from '$lib/log-buffer';
 	import type { LogLevel } from '$lib/log-buffer';
-	import { formatLogMessage, tokenizeJson } from '$lib/log-format';
+	import { findJsonInMessage, formatLogMessage, tokenizeJson } from '$lib/log-format';
 	import type { JsonToken } from '$lib/log-format';
 	import { PREFIX_WIDTH, STORAGE_KEYS, parseStoredWidth, pxToRem, remToPx } from '$lib/resize';
 	import { describeWindow } from '$lib/time-range';
@@ -125,6 +125,11 @@
 		streamName: string | undefined;
 		message: string;
 		tokens: JsonToken[] | null;
+		/**
+		 * Payload found inside the raw line, used when pretty-printing is off and
+		 * the row is expanded. `null` when the line carries no JSON.
+		 */
+		expandable: string | null;
 		level: LogLevel;
 		levelClass: string;
 	};
@@ -136,6 +141,14 @@
 		visible.map((event, index) => {
 			const level = detectLevel(event.message);
 			const formatted = formatLogMessage(event.message, { prettyJson: jsonView });
+			const levelClass = levelColorClass(level);
+			// With pretty-printing off, a line that carries JSON can still be
+			// opened on demand; the payload is found in the raw text.
+			let expandable: string | null = null;
+			if (!jsonView) {
+				const embedded = findJsonInMessage(event.message);
+				if (embedded !== null) expandable = JSON.stringify(embedded, null, 2);
+			}
 			return {
 				key: eventKey(event, index),
 				time: formatTime(event.timestamp),
@@ -143,8 +156,9 @@
 				streamName: event.streamName,
 				message: formatted.text,
 				tokens: jsonView && formatted.isJson ? tokenizeJson(formatted.text) : null,
+				expandable,
 				level,
-				levelClass: levelColorClass(level),
+				levelClass,
 			};
 		}),
 	);
@@ -189,6 +203,24 @@
 	let handleLeft = $derived(ROW_PADDING_PX + TIMESTAMP_COLUMN_PX + ROW_GAP_PX + prefixPx);
 	/** Prefix column width as a CSS length. */
 	let prefixStyle = $derived(`max-width: ${pxToRem(prefixPx)}`);
+
+	/** Rows the user has opened, keyed by row key. */
+	let expandedRows = $state<Record<string, boolean>>({});
+
+	/** True when a row is open. */
+	function isExpanded(key: string): boolean {
+		return expandedRows[key] === true;
+	}
+
+	/** Opens or closes a row that carries JSON. */
+	function toggleRow(key: string): void {
+		if (expandedRows[key] === true) {
+			const { [key]: _closed, ...rest } = expandedRows;
+			expandedRows = rest;
+			return;
+		}
+		expandedRows = { ...expandedRows, [key]: true };
+	}
 
 	/** Colour for a JSON token, keeping punctuation and whitespace quiet. */
 	function tokenClass(type: JsonToken['type']): string {
@@ -295,7 +327,7 @@
 				type="button"
 				onclick={toggleJson}
 				aria-pressed={jsonView}
-				title="Pretty-print JSON log entries"
+				title="Pretty-print JSON log entries (off: click a line to open its JSON)"
 				data-testid="json-toggle"
 				class="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs font-medium transition-colors hover:border-neutral-700 {jsonTone}"
 			>
@@ -355,10 +387,36 @@
 			<div class="relative min-h-full {listClass}" data-testid="log-canvas">
 				<ol class="font-mono text-xs leading-5" data-testid="log-lines">
 					{#each rows as row (row.key)}
+						{@const expandable = row.expandable !== null}
+						{@const open = expandable && isExpanded(row.key)}
+						<!-- Clicking a line that carries JSON opens it; a line without JSON is
+						     not a control, so it gets no role or handler. -->
+						<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+						<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 						<li
-							class="flex items-baseline gap-2 px-3 py-0.5 hover:bg-neutral-900/60 {listClass}"
+							class="flex flex-wrap items-baseline gap-2 px-3 py-0.5 hover:bg-neutral-900/60 {listClass} {expandable
+								? 'cursor-pointer'
+								: ''}"
 							data-testid="log-line"
 							data-level={row.level}
+							data-expandable={expandable ? 'true' : undefined}
+							data-expanded={open ? 'true' : undefined}
+							role={expandable ? 'button' : undefined}
+							tabindex={expandable ? 0 : undefined}
+							aria-expanded={expandable ? open : undefined}
+							title={expandable
+								? open
+									? 'Hide the JSON in this line'
+									: 'Show this line as JSON'
+								: undefined}
+							onclick={expandable ? () => toggleRow(row.key) : undefined}
+							onkeydown={expandable
+								? (event) => {
+										if (event.key !== 'Enter' && event.key !== ' ') return;
+										event.preventDefault();
+										toggleRow(row.key);
+									}
+								: undefined}
 						>
 							<span class="w-[7.5rem] shrink-0 text-neutral-500" title={row.timestamp}>
 								{row.time}
@@ -371,6 +429,11 @@
 							>
 								{row.streamName ?? ''}
 							</span>
+							{#if expandable}
+								<span class="shrink-0 text-neutral-600" aria-hidden="true">
+									{open ? '▾' : '▸'}
+								</span>
+							{/if}
 							<span class="{messageClass} {row.levelClass}" data-testid="log-message">
 								{#if row.tokens !== null}
 									{#each row.tokens as token, tokenIndex (`${row.key}-${tokenIndex}`)}<span
@@ -380,6 +443,16 @@
 									{row.message}
 								{/if}
 							</span>
+							{#if open && row.expandable !== null}
+								<span
+									class="w-full whitespace-pre text-xs text-neutral-300"
+									data-testid="log-json-expanded"
+								>
+									{#each tokenizeJson(row.expandable) as token, tokenIndex (`${row.key}-json-${tokenIndex}`)}<span
+											class={tokenClass(token.type)}>{token.text}</span
+										>{/each}
+								</span>
+							{/if}
 						</li>
 					{/each}
 				</ol>
