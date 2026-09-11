@@ -104,7 +104,12 @@ jobs:
   publish:
     name: Stage to npm
     needs: [plan, verify]
-    if: needs.plan.outputs.publish == 'true'
+    # `NPM_PUBLISH_ENABLED` is a repository variable (Settings → Secrets and
+    # variables → Actions → Variables) that is set to `true` once the npm trusted
+    # publisher for this workflow exists. Until then the workflow verifies the
+    # release commit and stops here instead of failing on an npm call it is not
+    # yet allowed to make. See RELEASING.md.
+    if: needs.plan.outputs.publish == 'true' && vars.NPM_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write

@@ -39,6 +39,10 @@ never sees publish credentials.
 
 ## One-time setup
 
+0. **Turn staging on.** The release workflow only stages to npm when the repository variable
+   `NPM_PUBLISH_ENABLED` is `true` (Settings → Secrets and variables → Actions → Variables). It is
+   unset on purpose: until the trusted publisher below exists, a staging attempt could only fail, so
+   the workflow verifies the release commit and stops. Set the variable last, after steps 1-5.
 1. **Two-factor authentication** on npm and GitHub, ideally with a security key.
 2. **Trusted publisher** for `watch-tail` on npm (or, before the package exists, from the CLI):
 
