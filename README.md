@@ -139,6 +139,32 @@ Two read-only actions are enough; the app never writes logs:
 
 Scope `Resource` down with a log-group ARN pattern if you only need a subset.
 
+### When credentials are missing
+
+On startup the CLI asks the running app for one log group. If AWS refuses because of credentials, it
+works out which login command fixes it - from how your profile is configured, not from guesswork -
+and offers to run it:
+
+```text
+warning: AWS credentials are not usable: ... The SSO session token associated with
+         profile=my-profile was not found or is invalid.
+? Sign in to the SSO session for my-profile. Run `aws sso login --profile my-profile` now? › yes
+running aws sso login --profile my-profile
+signed in - credentials work now
+```
+
+| Your profile                           | What it runs                                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `sso_session` / `sso_start_url`        | `aws sso login --profile <name>`                                                           |
+| `login_session` (console sign-in)      | `aws login --profile <name>`                                                               |
+| nothing configured yet                 | `aws login` (which creates the session)                                                    |
+| static keys, or a `credential_process` | no login is offered - those are fixed with `aws configure` or where the process is defined |
+
+The login runs with your terminal attached, so the browser flow works. `--remote` is added when there
+is no browser (SSH, headless). Decline, or run non-interactively, and the CLI prints the exact command
+instead and keeps the app up - log in elsewhere, then press Refresh. Emulator runs (`--endpoint`,
+`--floci`) skip the check, because those use throwaway credentials by design.
+
 **The region is optional.** Precedence is `--region`, then `AWS_REGION`/`AWS_DEFAULT_REGION`, then the
 profile's own region, then `[default]` in `~/.aws/config`. Nothing resolvable produces a clear
 `missing-region` message instead of a silent guess. Log groups, retention and events are per region,

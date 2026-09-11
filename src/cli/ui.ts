@@ -5,7 +5,16 @@
  * banner, spinner, autocomplete prompts. Anything else (pipes, CI, `--no-color`)
  * falls back to plain lines, which also keeps the integration tests readable.
  */
-import { autocomplete, cancel, intro, isCancel, log, outro, spinner } from '@clack/prompts';
+import {
+	autocomplete,
+	cancel,
+	confirm,
+	intro,
+	isCancel,
+	log,
+	outro,
+	spinner,
+} from '@clack/prompts';
 
 export type Ui = {
 	/** True when animated output and prompts are safe to use. */
@@ -23,6 +32,8 @@ export type Ui = {
 		options: { value: string; label?: string }[],
 		initial?: string | null,
 	): Promise<string | null>;
+	/** Asks a yes/no question; a non-interactive run always answers `false`. */
+	confirm(message: string, initial?: boolean): Promise<boolean>;
 };
 
 /** Decides whether the process can render animated output and ask questions. */
@@ -57,6 +68,7 @@ export function createUi(options: { interactive?: boolean } = {}): Ui {
 				const fallback = initial ?? choices[0]?.value ?? null;
 				return fallback;
 			},
+			confirm: async () => false,
 		};
 	}
 
@@ -88,6 +100,11 @@ export function createUi(options: { interactive?: boolean } = {}): Ui {
 				return null;
 			}
 			return String(answer);
+		},
+		confirm: async (message, initial = true) => {
+			const answer = await confirm({ message, initialValue: initial });
+			if (isCancel(answer)) return false;
+			return answer === true;
 		},
 	};
 }

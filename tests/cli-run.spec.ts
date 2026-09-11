@@ -5,11 +5,13 @@ import type { Ui } from '../src/cli/ui.ts';
 import type { startServer } from '../src/cli/server.ts';
 
 /** Records everything the UI would have shown. */
-function recorder(): Ui & { lines: string[] } {
+function recorder(answers: boolean[] = []): Ui & { lines: string[]; asked: string[] } {
 	const lines: string[] = [];
+	const asked: string[] = [];
 	const push = (text: string) => lines.push(text);
 	return {
 		lines,
+		asked,
 		interactive: false,
 		intro: push,
 		outro: push,
@@ -19,6 +21,10 @@ function recorder(): Ui & { lines: string[] } {
 		stopSpinner: push,
 		failSpinner: push,
 		choose: async (_message, choices, initial) => initial ?? choices[0]?.value ?? null,
+		confirm: async (message) => {
+			asked.push(message);
+			return answers.length > 0 ? (answers.shift() as boolean) : false;
+		},
 	};
 }
 
@@ -41,13 +47,19 @@ function harness(overrides: Partial<CliIo> = {}): Harness {
 	const io: Partial<CliIo> = {
 		stdout: (line) => out.push(line),
 		stderr: (line) => err.push(line),
-		env: { PATH: '/usr/bin', AWS_CONFIG_FILE: '/nonexistent/config' },
+		// Explicit, so the advice does not depend on the CI platform (Linux has no
+		// DISPLAY, which would add --remote).
+		env: { PATH: '/usr/bin', AWS_CONFIG_FILE: '/nonexistent/config', WATCH_TAIL_HEADLESS: '0' },
 		interactive: false,
 		readProfiles: () => ['default', 'acme-prod'],
 		readConfigText: () => '[profile acme-prod]\nregion = eu-west-1\n',
 		appRoot: '/tmp/watch-tail-app',
 		version: '1.2.3',
 		openBrowser: (url) => opened.push(url),
+		readCredentialsText: () => overrides.readCredentialsText?.() ?? '',
+		probeCredentials: (input) =>
+			(overrides.probeCredentials ?? (async () => ({ ok: true })))(input),
+		runLogin: (command) => (overrides.runLogin ?? (async () => 0))(command),
 		waitForHealth: async () => true,
 		startServerImpl: ((input) => {
 			started.push({ env: input.env, port: input.port, host: input.host });
@@ -181,5 +193,112 @@ describe('run: completions', () => {
 		const printed = log.mock.calls.map((call) => String(call[0])).join('\n');
 		log.mockRestore();
 		expect(printed).toContain('watch-tail');
+	});
+});
+
+describe('run: credential preflight', () => {
+	const SSO_CONFIG = '[profile acme-prod]\nsso_session = acme\nregion = eu-west-1\n';
+
+	/** A harness whose first probe fails, then succeeds after a login. */
+	function credentialHarness(options: {
+		probeResults: Awaited<ReturnType<NonNullable<CliIo['probeCredentials']>>>[];
+		answers?: boolean[];
+		loginCode?: number;
+	}) {
+		const h = harness({
+			readConfigText: () => SSO_CONFIG,
+			ui: undefined,
+		});
+		const ui = recorder(options.answers ?? [true]);
+		let call = 0;
+		const logins: string[][] = [];
+		h.io.ui = ui;
+		h.io.probeCredentials = async () => {
+			const result = options.probeResults[Math.min(call, options.probeResults.length - 1)];
+			call += 1;
+			return result;
+		};
+		h.io.runLogin = async (command) => {
+			logins.push(command);
+			return options.loginCode ?? 0;
+		};
+		return { ...h, ui, logins, probeCalls: () => call };
+	}
+
+	const failure = {
+		ok: false as const,
+		code: 'missing-credentials',
+		message:
+			"The SSO session token associated with profile=acme-prod was not found or is invalid. To refresh this SSO session run 'aws sso login'",
+		credentialProblem: true,
+	};
+
+	it('offers `aws sso login` for an SSO profile and retries after it succeeds', async () => {
+		const h = credentialHarness({ probeResults: [failure, { ok: true }] });
+
+		expect(await run(['--profile', 'acme-prod', '--no-open'], h.io)).toBe(0);
+
+		expect(h.logins).toEqual([['sso', 'login', '--profile', 'acme-prod']]);
+		expect(h.ui.asked.join(' ')).toContain('aws sso login --profile acme-prod');
+		expect(h.ui.lines.join('\n')).toContain('signed in');
+		expect(h.probeCalls()).toBe(2);
+	});
+
+	it('prints the command instead of running it when declined', async () => {
+		const h = credentialHarness({ probeResults: [failure], answers: [false] });
+
+		expect(await run(['--profile', 'acme-prod', '--no-open'], h.io)).toBe(0);
+
+		expect(h.logins).toEqual([]);
+		expect(h.ui.lines.join('\n')).toContain('run it yourself');
+		expect(h.ui.lines.join('\n')).toContain('aws sso login --profile acme-prod');
+	});
+
+	it('reports a login that fails', async () => {
+		const h = credentialHarness({ probeResults: [failure], loginCode: 1 });
+
+		expect(await run(['--profile', 'acme-prod', '--no-open'], h.io)).toBe(0);
+
+		expect(h.ui.lines.join('\n')).toContain('exited with code 1');
+	});
+
+	it('reports credentials that still fail after logging in', async () => {
+		const h = credentialHarness({ probeResults: [failure, failure] });
+
+		expect(await run(['--profile', 'acme-prod', '--no-open'], h.io)).toBe(0);
+
+		expect(h.ui.lines.join('\n')).toContain('still failing after login');
+	});
+
+	it('does not offer a login when the API fails for another reason', async () => {
+		const h = credentialHarness({
+			probeResults: [
+				{ ok: false, code: 'unreachable', message: 'connection refused', credentialProblem: true },
+			],
+		});
+
+		expect(await run([], h.io)).toBe(0);
+
+		expect(h.ui.asked).toEqual([]);
+		expect(h.ui.lines.join('\n')).toContain('could not list log groups');
+	});
+
+	it('adds --remote when there is no browser', async () => {
+		const base = harness();
+		const h = credentialHarness({ probeResults: [failure], answers: [true] });
+		h.io.env = { ...base.io.env, WATCH_TAIL_HEADLESS: '1' };
+
+		expect(await run(['--profile', 'acme-prod', '--no-open'], h.io)).toBe(0);
+
+		expect(h.logins).toEqual([['sso', 'login', '--profile', 'acme-prod', '--remote']]);
+	});
+
+	it('skips the check entirely for an emulator endpoint', async () => {
+		const h = credentialHarness({ probeResults: [failure] });
+
+		expect(await run(['--floci', '--no-open'], h.io)).toBe(0);
+
+		expect(h.probeCalls()).toBe(0);
+		expect(h.ui.asked).toEqual([]);
 	});
 });

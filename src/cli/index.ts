@@ -16,10 +16,18 @@ import {
 	isEmulatorEndpoint,
 	isLocalEnvPresent,
 	readConfigText,
+	readCredentialsText,
 	readProfiles,
 	resolveRunRegion,
 	signalExitCode,
 } from '../lib/cli/aws.ts';
+import {
+	classifyCredentialFailure,
+	describeStyle,
+	isCredentialFailure,
+	loginAdvice,
+	readProfileStyle,
+} from '../lib/cli/credentials.ts';
 import { handleCompletion } from './completions.ts';
 import { isLoopbackHost, parseCliArgs, usageText, type CliOptions } from './options.ts';
 import {
@@ -31,6 +39,12 @@ import {
 	uiUrl,
 	waitForHealth,
 } from './server.ts';
+import {
+	isHeadless,
+	probeCredentials as probeCredentialsDefault,
+	runLogin as runLoginDefault,
+	type CredentialProbe,
+} from './preflight.ts';
 import { createUi, isInteractive, type Ui } from './ui.ts';
 
 /** Every side effect the CLI needs, so tests can run it in-process. */
@@ -50,6 +64,12 @@ export type CliIo = {
 	version: string;
 	/** Opens a URL in the browser. */
 	openBrowser: (url: string) => void;
+	/** Reads `~/.aws/credentials`. */
+	readCredentialsText: () => string;
+	/** Asks the running app whether it can reach CloudWatch Logs. */
+	probeCredentials: (input: { baseUrl: string; region: string | null }) => Promise<CredentialProbe>;
+	/** Runs `aws ...` with the terminal attached, so an interactive login works. */
+	runLogin: (command: string[]) => Promise<number>;
 	/** Health poller. */
 	waitForHealth: typeof waitForHealth;
 	/** Used for tests that must not spawn a server. */
@@ -112,11 +132,20 @@ function defaultIo(): CliIo {
 		appRoot,
 		version: readVersion(appRoot),
 		openBrowser: (url) => openBrowserDefault(url),
+		readCredentialsText: () => readCredentialsText(),
+		probeCredentials: (input) => probeCredentialsDefault(input),
+		runLogin: (command) => runLoginDefault(command),
 		waitForHealth,
 		startServerImpl: startServer,
 		spawnImpl: spawn,
 		waitForStop,
 	};
+}
+
+/** `AWS_PROFILE` from the environment, trimmed, or `null`. */
+export function ambientProfile(env: NodeJS.ProcessEnv): string | null {
+	const value = env.AWS_PROFILE?.trim();
+	return value !== undefined && value.length > 0 ? value : null;
 }
 
 /** Region for this run: explicit flag, then the shell, then the profile. */
@@ -132,6 +161,71 @@ export function resolveCliRegion(options: CliOptions, io: CliIo): string | null 
 	// so a local run that resolves nothing opens on the seeded region.
 	if (options.endpoint !== null && isEmulatorEndpoint(options.endpoint)) return 'us-east-1';
 	return null;
+}
+
+/**
+ * Asks the running app for one log group and, when AWS refuses because of
+ * credentials, offers to run the login command that profile needs.
+ *
+ * Emulator runs are skipped: `--floci` supplies throwaway keys on purpose.
+ */
+async function ensureCredentials(input: {
+	options: CliOptions;
+	io: CliIo;
+	ui: Ui;
+	url: string;
+	region: string | null;
+}): Promise<void> {
+	const { options, io, ui, url, region } = input;
+	if (options.endpoint !== null) return;
+
+	const probe = await io.probeCredentials({ baseUrl: url, region });
+	if (probe.ok) return;
+	if (!probe.credentialProblem || !isCredentialFailure(probe.code, probe.message)) {
+		ui.warn(`could not list log groups: ${probe.message}`);
+		return;
+	}
+
+	// The flag wins, then the ambient AWS_PROFILE: both decide which login
+	// command can actually repair the failure.
+	const profile = options.profile ?? ambientProfile(io.env) ?? 'default';
+	const style = readProfileStyle(io.readConfigText(), io.readCredentialsText(), profile);
+	const failure = classifyCredentialFailure(probe.message, probe.code);
+	const advice = loginAdvice({
+		style,
+		failure,
+		profile,
+		remote: isHeadless(io.env),
+	});
+
+	ui.warn(`AWS credentials are not usable: ${probe.message}`);
+	if (advice === null) {
+		ui.info(
+			style === 'static'
+				? `the ${describeStyle(style)} in profile "${profile}" look wrong - check them with \`aws configure --profile ${profile}\``
+				: `no login command applies to profile "${profile}" (${describeStyle(style)})`,
+		);
+		return;
+	}
+
+	const label = `aws ${advice.command.join(' ')}`;
+	const accepted = await ui.confirm(`${advice.hint}. Run \`${label}\` now?`);
+	if (!accepted) {
+		ui.info(`run it yourself, then press Refresh in the UI: ${label}`);
+		return;
+	}
+
+	ui.info(`running ${label}`);
+	const code = await io.runLogin(advice.command);
+	if (code !== 0) {
+		ui.warn(`${label} exited with code ${code}`);
+		ui.info(`log in another terminal, then press Refresh in the UI: ${label}`);
+		return;
+	}
+
+	const retry = await io.probeCredentials({ baseUrl: url, region });
+	if (retry.ok) ui.info('signed in - credentials work now');
+	else ui.warn(`still failing after login: ${retry.message}`);
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -168,11 +262,15 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 	}
 
 	const region = resolveCliRegion(options, io);
+	// `--profile` wins, then the ambient AWS_PROFILE: the credential check and
+	// the login advice both need to know which profile is actually in play.
+	const profile = options.profile ?? ambientProfile(io.env);
 	const childEnv = buildChildEnv({
 		base: io.env,
 		profile: options.profile,
 		region,
 		endpoint: options.endpoint,
+		clearStaticKeys: options.profile === null && profile !== null,
 	});
 
 	if (options.print) {
@@ -219,6 +317,11 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 		return 1;
 	}
 	ui.stopSpinner(`listening on ${url}`);
+
+	// Before sending anyone to a UI that cannot load logs, check that AWS will
+	// actually answer, and offer the login that fixes it.
+	await ensureCredentials({ options, io, ui, url, region });
+
 	if (options.open) io.openBrowser(url);
 	ui.outro(`${url} (Ctrl+C to stop)`);
 
