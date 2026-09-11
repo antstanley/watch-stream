@@ -5,11 +5,17 @@ import type { Ui } from '../src/cli/ui.ts';
 import type { startServer } from '../src/cli/server.ts';
 
 /** Records everything the UI would have shown. */
-function recorder(answers: boolean[] = []): Ui & { lines: string[]; asked: string[] } {
+function recorder(
+	options: { confirm?: boolean[]; choose?: (string | null)[] } = {},
+): Ui & { lines: string[]; asked: string[]; choices: string[] } {
 	const lines: string[] = [];
 	const asked: string[] = [];
+	const choices: string[] = [];
+	const confirms = [...(options.confirm ?? [])];
+	const chosen = [...(options.choose ?? [])];
 	const push = (text: string) => lines.push(text);
 	return {
+		choices,
 		lines,
 		asked,
 		interactive: false,
@@ -20,10 +26,14 @@ function recorder(answers: boolean[] = []): Ui & { lines: string[]; asked: strin
 		startSpinner: push,
 		stopSpinner: push,
 		failSpinner: push,
-		choose: async (_message, choices, initial) => initial ?? choices[0]?.value ?? null,
+		choose: async (message, items, initial) => {
+			asked.push(message);
+			if (chosen.length > 0) return chosen.shift() as string | null;
+			return initial ?? items[0]?.value ?? null;
+		},
 		confirm: async (message) => {
 			asked.push(message);
-			return answers.length > 0 ? (answers.shift() as boolean) : false;
+			return confirms.length > 0 ? (confirms.shift() as boolean) : false;
 		},
 	};
 }
@@ -51,8 +61,9 @@ function harness(overrides: Partial<CliIo> = {}): Harness {
 		// DISPLAY, which would add --remote).
 		env: { PATH: '/usr/bin', AWS_CONFIG_FILE: '/nonexistent/config', WATCH_TAIL_HEADLESS: '0' },
 		interactive: false,
-		readProfiles: () => ['default', 'acme-prod'],
-		readConfigText: () => '[profile acme-prod]\nregion = eu-west-1\n',
+		readProfiles: () => overrides.readProfiles?.() ?? ['default', 'acme-prod'],
+		readConfigText: () =>
+			overrides.readConfigText?.() ?? '[profile acme-prod]\nregion = eu-west-1\n',
 		appRoot: '/tmp/watch-tail-app',
 		version: '1.2.3',
 		openBrowser: (url) => opened.push(url),
@@ -64,7 +75,15 @@ function harness(overrides: Partial<CliIo> = {}): Harness {
 		waitForHealth: async () => true,
 		startServerImpl: ((input) => {
 			started.push({ env: input.env, port: input.port, host: input.host });
-			return { kill: () => true, exitCode: null, signalCode: null } as unknown as ChildProcess;
+			return {
+				kill: () => true,
+				exitCode: null,
+				signalCode: null,
+				once: (event: string, listener: () => void) => {
+					if (event === 'close') setTimeout(listener, 0);
+					return undefined;
+				},
+			} as unknown as ChildProcess;
 		}) as typeof startServer,
 		waitForStop: async () => 0,
 		ui,
@@ -210,7 +229,7 @@ describe('run: credential preflight', () => {
 			readConfigText: () => SSO_CONFIG,
 			ui: undefined,
 		});
-		const ui = recorder(options.answers ?? [true]);
+		const ui = recorder({ confirm: options.answers ?? [true] });
 		let call = 0;
 		const logins: string[][] = [];
 		h.io.ui = ui;
@@ -348,5 +367,146 @@ describe("run: the app's .env.local", () => {
 		await run(['--no-open'], h.io);
 
 		expect(h.ui.lines.join('\n')).not.toContain('ignoring the emulator settings');
+	});
+});
+
+describe('run: choosing a profile when credentials fail', () => {
+	const failure = {
+		ok: false as const,
+		code: 'missing-credentials',
+		message: 'Your session has expired. Please reauthenticate.',
+		credentialProblem: true,
+	};
+	const CONFIG = [
+		'[default]',
+		'region = us-west-1',
+		'login_session = arn:aws:iam::111111111111:user/me',
+		'',
+		'[profile acme-prod]',
+		'sso_session = acme',
+		'region = eu-west-1',
+		'',
+	].join('\n');
+
+	/** A run where the first probe fails and later probes depend on the profile. */
+	function profileHarness(options: {
+		choose?: (string | null)[];
+		confirm?: boolean[];
+		profiles?: string[];
+		probes?: Awaited<ReturnType<NonNullable<CliIo['probeCredentials']>>>[];
+	}) {
+		const h = harness({
+			readConfigText: () => CONFIG,
+			readProfiles: () => options.profiles ?? ['default', 'acme-prod'],
+		});
+		const ui = recorder({ confirm: options.confirm ?? [true], choose: options.choose ?? [] });
+		let call = 0;
+		const logins: string[][] = [];
+		h.io.ui = ui;
+		h.io.probeCredentials = async () => {
+			const results = options.probes ?? [failure, { ok: true }];
+			const result = results[Math.min(call, results.length - 1)];
+			call += 1;
+			return result;
+		};
+		h.io.runLogin = async (command) => {
+			logins.push(command);
+			return 0;
+		};
+		return { ...h, ui, logins };
+	}
+
+	it('asks which profile to use and logs in with the one chosen', async () => {
+		const h = profileHarness({ choose: ['acme-prod'] });
+
+		expect(await run(['--no-open'], h.io)).toBe(0);
+
+		expect(h.ui.asked.join(' ')).toContain('Which AWS profile');
+		expect(h.logins).toEqual([['sso', 'login', '--profile', 'acme-prod']]);
+		// the app is restarted so it actually runs as that profile
+		expect(h.started).toHaveLength(2);
+		expect(h.started[1].env.AWS_PROFILE).toBe('acme-prod');
+		expect(h.ui.lines.join('\n')).toContain('signed in as acme-prod');
+	});
+
+	it('keeps the default profile when that is what the user picks', async () => {
+		const h = profileHarness({ choose: ['default'] });
+
+		expect(await run(['--no-open'], h.io)).toBe(0);
+
+		expect(h.logins).toEqual([['login']]);
+		expect(h.started).toHaveLength(1);
+		expect(h.ui.lines.join('\n')).toContain('signed in');
+	});
+
+	it('does not ask when only one profile exists', async () => {
+		const h = profileHarness({ profiles: ['default'] });
+
+		await run(['--no-open'], h.io);
+
+		expect(h.ui.asked.join(' ')).not.toContain('Which AWS profile');
+		expect(h.logins).toEqual([['login']]);
+	});
+
+	it('does not ask when the profile was given explicitly', async () => {
+		const h = profileHarness({ profiles: ['default', 'acme-prod'] });
+
+		await run(['--profile', 'acme-prod', '--no-open'], h.io);
+
+		expect(h.ui.asked.join(' ')).not.toContain('Which AWS profile');
+		expect(h.logins).toEqual([['sso', 'login', '--profile', 'acme-prod']]);
+	});
+
+	it('does not ask when AWS_PROFILE is set', async () => {
+		const h = profileHarness({});
+		h.io.env = { ...h.io.env, AWS_PROFILE: 'acme-prod' };
+
+		await run(['--no-open'], h.io);
+
+		expect(h.ui.asked.join(' ')).not.toContain('Which AWS profile');
+		expect(h.logins).toEqual([['sso', 'login', '--profile', 'acme-prod']]);
+	});
+
+	it('reports a profile that still fails after logging in', async () => {
+		const h = profileHarness({ choose: ['acme-prod'], probes: [failure, failure] });
+
+		expect(await run(['--no-open'], h.io)).toBe(0);
+
+		expect(h.ui.lines.join('\n')).toContain('still failing with profile acme-prod');
+	});
+});
+
+describe('run: declining the login after choosing a profile', () => {
+	it('restarts with the chosen profile and says so, without claiming a failure', async () => {
+		const failure = {
+			ok: false as const,
+			code: 'missing-credentials',
+			message: 'Your session has expired. Please reauthenticate.',
+			credentialProblem: true,
+		};
+		const h = harness({
+			readConfigText: () => '[profile beyond-mzansi]\nregion = af-south-1\n',
+			readProfiles: () => ['default', 'beyond-mzansi'],
+		});
+		const ui = recorder({ confirm: [false], choose: ['beyond-mzansi'] });
+		let probes = 0;
+		h.io.ui = ui;
+		h.io.probeCredentials = async () => {
+			probes += 1;
+			return failure;
+		};
+		h.io.runLogin = async () => 0;
+
+		expect(await run(['--no-open'], h.io)).toBe(0);
+
+		expect(h.started).toHaveLength(2);
+		// the chosen profile's own region, not the one from the previous run
+		expect(h.started[1].env.AWS_PROFILE).toBe('beyond-mzansi');
+		expect(h.started[1].env.AWS_REGION).toBe('af-south-1');
+		// `ui` is the recorder this test installed; `h.ui` is the harness's own.
+		expect(ui.lines.join('\n')).toContain('the app is using profile beyond-mzansi');
+		expect(ui.lines.join('\n')).not.toContain('still failing');
+		// declined: nothing is probed a second time
+		expect(probes).toBe(1);
 	});
 });
