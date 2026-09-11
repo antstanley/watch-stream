@@ -1,5 +1,17 @@
 # watch-tail
 
+## 0.3.1
+
+### Patch Changes
+
+- [#7](https://github.com/antstanley/watch-stream/pull/7) [`1f7a31a`](https://github.com/antstanley/watch-stream/commit/1f7a31a0b6769e19a6f1a222714b89ea860af6c0) Thanks [@antstanley](https://github.com/antstanley)! - Stop a development `.env.local` from silently redirecting the CLI at the emulator.
+
+  Running `watch-tail` inside a checkout that has a `.env.local` (written by
+  `pnpm floci:env` for the dev server) pointed the whole UI at floci instead of
+  real AWS. The CLI now suppresses the emulator settings it finds in that file,
+  prints which keys it ignored, and tells you `--floci` is the way to use them.
+  Values you export yourself still win, and `--floci` still targets the emulator.
+
 ## 0.3.0
 
 ### Minor Changes
