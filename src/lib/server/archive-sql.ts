@@ -9,7 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import { detectLevelWithSource, isLogLevel, type LogLevel } from '$lib/log-buffer';
-import type { LogEventDto } from '$lib/types';
+import type { LogEventDto, SeriesLevel } from '$lib/types';
 
 /** A value that can be bound to a `?` placeholder. */
 export type ArchiveParam = string | number | bigint | null;
@@ -132,7 +132,8 @@ export type ArchiveCursor = { timestamp: number; seq: number };
 /** One page of archived events. */
 export type ArchivePageRequest = {
 	region: string;
-	logGroup: string;
+	/** Log groups to read; one statement covers all of them. */
+	logGroups: readonly string[];
 	startTime: number;
 	endTime: number;
 	/** Case-insensitive substring of the message, or `null` for everything. */
@@ -166,10 +167,16 @@ export function buildPageQuery(request: ArchivePageRequest): {
 	params: ArchiveParam[];
 } {
 	const limit = Math.max(1, Math.round(request.limit));
-	const where: string[] = ['region = ?', 'log_group = ?', 'timestamp_ms >= ?', 'timestamp_ms <= ?'];
+	const groups = request.logGroups.length > 0 ? request.logGroups : [''];
+	const where: string[] = [
+		'region = ?',
+		`log_group IN (${groups.map(() => '?').join(', ')})`,
+		'timestamp_ms >= ?',
+		'timestamp_ms <= ?',
+	];
 	const params: ArchiveParam[] = [
 		request.region,
-		request.logGroup,
+		...groups,
 		BigInt(Math.round(request.startTime)),
 		BigInt(Math.round(request.endTime)),
 	];
@@ -249,6 +256,7 @@ export function rowsToPage(rows: readonly Record<string, unknown>[]): {
 		const seq = toNumber(pick(row, 'seq'));
 		if (timestamp === null || seq === null) continue;
 		const rawLevel = pick(row, 'level');
+		const group = toNullableString(pick(row, 'log_group'));
 		const event: LogEventDto = {
 			id: toNullableString(pick(row, 'event_key')),
 			timestamp,
@@ -257,6 +265,7 @@ export function rowsToPage(rows: readonly Record<string, unknown>[]): {
 			// which is different from a client that never asked.
 			level: isLogLevel(rawLevel) ? rawLevel : null,
 		};
+		if (group !== null) event.group = group;
 		const streamName = toNullableString(pick(row, 'log_stream'));
 		if (streamName !== null) event.streamName = streamName;
 		const ingestionTime = toNumber(pick(row, 'ingestion_time_ms'));
@@ -328,4 +337,85 @@ export function rowsToGroups(rows: readonly Record<string, unknown>[]): ArchiveG
 		});
 	}
 	return groups;
+}
+
+/** One bucket of the chart series query. */
+export type ArchiveSeriesRow = {
+	/** Bucket start, epoch ms. */
+	t: number;
+	group: string;
+	/** Level of the events in this bucket; `unknown` when the level is NULL. */
+	level: SeriesLevel;
+	events: number;
+};
+
+/** Request for {@link buildSeriesQuery}. */
+export type ArchiveSeriesRequest = {
+	region: string;
+	logGroups: readonly string[];
+	startTime: number;
+	endTime: number;
+	/** Bucket width in ms; the caller derives it from the window. */
+	bucketMs: number;
+	/** Levels to count, or `null` for every level. */
+	levels?: readonly LogLevel[] | null;
+};
+
+/**
+ * Builds the bucketed counts behind the chart.
+ *
+ * One statement returns every series. The bucket is plain integer arithmetic on
+ * `timestamp_ms`, so it cannot drift with a time zone; NULL levels are reported
+ * as `unknown` rather than dropped; and a level filter matches only rows that
+ * carry one of the requested levels.
+ */
+export function buildSeriesQuery(request: ArchiveSeriesRequest): {
+	sql: string;
+	params: ArchiveParam[];
+} {
+	const bucketMs = Math.max(1, Math.round(request.bucketMs));
+	const groups = request.logGroups.length > 0 ? request.logGroups : [''];
+	const where: string[] = [
+		'region = ?',
+		`log_group IN (${groups.map(() => '?').join(', ')})`,
+		'timestamp_ms >= ?',
+		'timestamp_ms <= ?',
+	];
+	// Bind order follows the statement: the bucket arithmetic appears in the
+	// SELECT clause, so its two placeholders come first.
+	const params: ArchiveParam[] = [
+		BigInt(bucketMs),
+		BigInt(bucketMs),
+		request.region,
+		...groups,
+		BigInt(Math.round(request.startTime)),
+		BigInt(Math.round(request.endTime)),
+	];
+	const levels = request.levels ?? [];
+	if (levels.length > 0) {
+		where.push(`level IN (${levels.map(() => '?').join(', ')})`);
+		params.push(...levels);
+	}
+	return {
+		sql: `SELECT CAST(floor(timestamp_ms / ?) * ? AS BIGINT) AS bucket, log_group, coalesce(level, 'unknown') AS level, count(*) AS events FROM log_events WHERE ${where.join(' AND ')} GROUP BY bucket, log_group, level ORDER BY bucket, log_group, level`,
+		params,
+	};
+}
+
+/** Maps the rows of {@link buildSeriesQuery} onto chart points. */
+export function rowsToSeries(rows: readonly Record<string, unknown>[]): ArchiveSeriesRow[] {
+	const points: ArchiveSeriesRow[] = [];
+	for (const row of rows) {
+		const t = toNumber(pick(row, 'bucket'));
+		const group = pick(row, 'log_group');
+		const level = pick(row, 'level');
+		if (t === null || typeof group !== 'string') continue;
+		points.push({
+			t,
+			group,
+			level: typeof level === 'string' && level.length > 0 ? (level as SeriesLevel) : 'unknown',
+			events: toNumber(pick(row, 'events')) ?? 0,
+		});
+	}
+	return points;
 }

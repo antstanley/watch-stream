@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LogLevel } from '$lib/log-buffer';
 import LogViewer from './LogViewer.svelte';
 import type { LogEventDto } from '$lib/types';
 
@@ -248,6 +249,7 @@ describe('LogViewer window chip', () => {
 	const ready = {
 		region: 'us-east-1',
 		logGroupName: '/aws/app',
+		groups: ['/aws/app'],
 		endpoint: null,
 		source: 'cloudwatch' as const,
 		startTime: Date.UTC(2024, 4, 10, 11, 0, 0),
@@ -297,6 +299,7 @@ describe('LogViewer archive mode', () => {
 	const archiveReady = {
 		region: 'us-east-1',
 		logGroupName: '/aws/app',
+		groups: ['/aws/app'],
 		endpoint: null,
 		source: 'archive' as const,
 		startTime: Date.UTC(2024, 4, 10, 11, 0, 0),
@@ -558,5 +561,82 @@ describe('LogViewer level filter', () => {
 			},
 		});
 		expect(screen.getAllByTestId('log-line')[0]?.dataset.level).toBe('debug');
+	});
+});
+
+describe('LogViewer group column', () => {
+	const TWO_GROUPS = [
+		{ id: 'a', timestamp: 1_700_000_000_000, message: 'from one', group: '/aws/lambda/one' },
+		{ id: 'b', timestamp: 1_700_000_001_000, message: 'from two', group: '/aws/lambda/two' },
+	];
+
+	it('adds a group column only when several groups are in view', () => {
+		const single = render(LogViewer, {
+			props: { lines: TWO_GROUPS, group: '/aws/lambda/one', groups: ['/aws/lambda/one'] },
+		});
+		expect(screen.queryAllByTestId('log-group')).toHaveLength(0);
+		single.unmount();
+
+		render(LogViewer, {
+			props: {
+				lines: TWO_GROUPS,
+				group: '/aws/lambda/one',
+				groups: ['/aws/lambda/one', '/aws/lambda/two'],
+			},
+		});
+		const cells = screen.getAllByTestId('log-group');
+		expect(cells.map((cell) => cell.textContent)).toEqual(['/aws/lambda/one', '/aws/lambda/two']);
+	});
+
+	it('labels lines from the group that produced them', () => {
+		render(LogViewer, {
+			props: {
+				lines: TWO_GROUPS,
+				// A selected group is what makes the viewer show lines at all.
+				group: '/aws/lambda/one',
+				groups: ['/aws/lambda/one', '/aws/lambda/two'],
+			},
+		});
+		const rows = screen.getAllByTestId('log-line');
+		expect(rows[0]?.textContent).toContain('/aws/lambda/one');
+		expect(rows[1]?.textContent).toContain('/aws/lambda/two');
+	});
+});
+
+describe('LogViewer controlled level filter', () => {
+	const LEVEL_LINES = [
+		{
+			id: 'a',
+			timestamp: 1_700_000_000_000,
+			message: '{"level":"error","msg":"boom"}',
+			level: 'error' as const,
+		},
+		{
+			id: 'b',
+			timestamp: 1_700_000_001_000,
+			message: '{"level":"info","msg":"ok"}',
+			level: 'info' as const,
+		},
+	];
+
+	it('uses the level it is given and reports changes upwards', async () => {
+		const onLevelChange = vi.fn<(level: LogLevel | null) => void>();
+		render(LogViewer, {
+			props: { lines: LEVEL_LINES, group: '/aws/app', level: 'error', onLevelChange },
+		});
+		// The parent's filter is applied: only the error line is visible.
+		expect(screen.getAllByTestId('log-line')).toHaveLength(1);
+
+		await fireEvent.click(screen.getByTestId('level-all'));
+		expect(onLevelChange).toHaveBeenCalledWith(null);
+		await fireEvent.click(screen.getByTestId('level-info'));
+		expect(onLevelChange).toHaveBeenCalledWith('info');
+	});
+
+	it('keeps owning the filter when no level prop is passed', async () => {
+		render(LogViewer, { props: { lines: LINES, group: '/aws/app' } });
+		expect(screen.getAllByTestId('log-line')).toHaveLength(2);
+		await fireEvent.click(screen.getByTestId('level-error'));
+		expect(screen.getAllByTestId('log-line')).toHaveLength(1);
 	});
 });

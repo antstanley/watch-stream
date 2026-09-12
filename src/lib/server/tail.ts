@@ -14,7 +14,7 @@ export type TailBatch =
 	| { type: 'end'; reason: TailEndReason };
 
 /** Why a tail stopped on its own. */
-type TailEndReason = 'window-complete' | 'event-limit' | 'repeated-errors';
+export type TailEndReason = 'window-complete' | 'event-limit' | 'repeated-errors';
 
 /** Sleep implementation, injectable so tests never wait on real timers. */
 export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;

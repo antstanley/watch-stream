@@ -79,6 +79,8 @@ export type LogEventDto = {
 	 * the client falls back to its own guess.
 	 */
 	level?: LogLevel | null;
+	/** Log group the event belongs to; sent when more than one group is in play. */
+	group?: string;
 };
 
 export type ApiErrorBody = {
@@ -114,7 +116,10 @@ export type HealthResponse = {
 
 export type StreamReadyPayload = {
 	region: string;
+	/** First selected group; kept for single-group clients. */
 	logGroupName: string;
+	/** Every selected group, in request order. */
+	groups: string[];
 	endpoint: string | null;
 	/** Where this stream reads from. */
 	source: StreamSource;
@@ -156,4 +161,39 @@ export type IdentityResponse = {
 	userId: string;
 	region: string;
 	endpoint: string | null;
+};
+
+/** Level of a chart series; `unknown` counts events whose level was not detected. */
+export type SeriesLevel = LogLevel | 'unknown';
+
+/** One bucket of the chart: events of one level, in one group, in one time bucket. */
+export type SeriesPoint = {
+	/** Bucket start, epoch milliseconds. */
+	t: number;
+	/** Log group the events came from. */
+	group: string;
+	level: SeriesLevel;
+	events: number;
+};
+
+/** Events per group over the whole window. */
+export type SeriesGroupTotal = { group: string; events: number };
+
+/** Events per level over the whole window. */
+export type SeriesLevelTotal = { level: SeriesLevel; events: number };
+
+/** Answer of `GET /api/series` - the data behind the chart. */
+export type SeriesResponse = {
+	/** Inclusive start of the window, epoch ms. */
+	from: number;
+	/** Inclusive end of the window, epoch ms. */
+	to: number;
+	/** Bucket width in ms. */
+	bucketMs: number;
+	/** Totals per level, in severity order. */
+	levels: SeriesLevelTotal[];
+	/** Totals per group, busiest first. */
+	groups: SeriesGroupTotal[];
+	points: SeriesPoint[];
+	totals: { events: number; points: number };
 };

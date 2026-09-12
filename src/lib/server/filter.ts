@@ -64,6 +64,8 @@ export function resolveStartTime(input: {
 	startTime?: string | null;
 	lookback?: string | null;
 	now: number;
+	/** Oldest point allowed, in ms before `now`; `null` disables the clamp. */
+	maxLookbackMs?: number | null;
 }): number {
 	const { now } = input;
 	const explicit = parseStartTime(input.startTime, now);
@@ -72,9 +74,12 @@ export function resolveStartTime(input: {
 		const lookbackMs = parseDurationMs(input.lookback ?? '') ?? DEFAULT_LOOKBACK_MS;
 		start = now - lookbackMs;
 	}
-	const oldestAllowed = now - MAX_LOOKBACK_MS;
 	if (start > now) start = now;
-	if (start < oldestAllowed) start = oldestAllowed;
+	const maxLookback = input.maxLookbackMs === undefined ? MAX_LOOKBACK_MS : input.maxLookbackMs;
+	if (maxLookback !== null) {
+		const oldestAllowed = now - maxLookback;
+		if (start < oldestAllowed) start = oldestAllowed;
+	}
 	return Math.round(start);
 }
 
@@ -155,8 +160,15 @@ function clampWindow(
 	start: number,
 	end: number,
 	now: number,
+	maxLookbackMs: number | null = MAX_LOOKBACK_MS,
 ): { start: number; end: number; clamped: boolean } | null {
-	const oldest = now - MAX_LOOKBACK_MS;
+	// A source without CloudWatch's retention (the local archive) keeps the
+	// requested bounds as they are, so old history stays reachable.
+	if (maxLookbackMs === null) {
+		const clampedEnd = Math.max(end, start + 1);
+		return { start: Math.round(start), end: Math.round(clampedEnd), clamped: false };
+	}
+	const oldest = now - maxLookbackMs;
 	if (end <= oldest) return null;
 	const clampedStart = Math.min(Math.max(start, oldest), now);
 	const clampedEnd = Math.min(Math.max(end, clampedStart + 1), now);
@@ -176,7 +188,19 @@ function clampWindow(
  * smallest preset. Windows are clamped to the last 14 days and to `now` so the
  * request can never ask CloudWatch for data it will not return.
  */
-export function resolveWindow(input: WindowRequest): WindowResult {
+export function resolveWindow(
+	input: WindowRequest,
+	options: {
+		/**
+		 * Oldest point a window may reach, in ms before `now`. `null` disables the
+		 * retention clamp, which is what the local archive needs: it holds data
+		 * CloudWatch has already forgotten.
+		 */
+		maxLookbackMs?: number | null;
+	} = {},
+): WindowResult {
+	const maxLookbackMs =
+		options.maxLookbackMs === undefined ? MAX_LOOKBACK_MS : options.maxLookbackMs;
 	const { now } = input;
 	const requestedMode =
 		input.mode === null || input.mode === undefined ? 'live' : input.mode.trim();
@@ -193,7 +217,12 @@ export function resolveWindow(input: WindowRequest): WindowResult {
 		return {
 			ok: true,
 			mode,
-			startTime: resolveStartTime({ startTime: input.startTime, lookback: input.lookback, now }),
+			startTime: resolveStartTime({
+				startTime: input.startTime,
+				lookback: input.lookback,
+				now,
+				maxLookbackMs,
+			}),
 			endTime: null,
 			preset: null,
 			clamped: false,
@@ -233,12 +262,15 @@ export function resolveWindow(input: WindowRequest): WindowResult {
 				message: 'The end of the window must be after its start',
 			};
 		}
-		const clamped = clampWindow(parsedFrom, parsedTo, now);
+		const clamped = clampWindow(parsedFrom, parsedTo, now, maxLookbackMs);
 		if (clamped === null || clamped.end <= clamped.start) {
 			return {
 				ok: false,
 				code: 'invalid-window',
-				message: 'The requested window is outside the 14 days CloudWatch Logs keeps',
+				message:
+					maxLookbackMs === null
+						? 'The end of the window must be after its start'
+						: 'The requested window is outside the 14 days CloudWatch Logs keeps',
 			};
 		}
 		return {

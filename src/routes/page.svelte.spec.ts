@@ -56,6 +56,10 @@ class FakeEventSource {
 
 /** Archive availability the stubbed `/api/archive` answers with. */
 let archiveAvailable = true;
+/** Groups the stubbed CloudWatch list returns; a test may add a second one. */
+let cloudwatchGroups: { name: string; storedBytes?: number }[] = [
+	{ name: '/aws/app', storedBytes: 2048 },
+];
 /** Every URL the page fetched, in order. */
 let requested: string[] = [];
 
@@ -94,11 +98,23 @@ function stubApi(input: string): Promise<Response> {
 			newest: archiveAvailable ? 2000 : null,
 		});
 	}
+	if (url.pathname === '/api/series') {
+		return json({
+			from: 1_700_000_000_000,
+			to: 1_700_000_900_000,
+			bucketMs: 60_000,
+			levels: [{ level: 'error', events: 2 }],
+			groups: [{ group: '/aws/app', events: 2 }],
+			points: [
+				{ t: 1_700_000_000_000, group: '/aws/app', level: 'error', events: 1 },
+				{ t: 1_700_000_060_000, group: '/aws/app', level: 'error', events: 1 },
+			],
+			totals: { events: 2, points: 2 },
+		});
+	}
 	if (url.pathname === '/api/log-groups') {
 		const groups =
-			source === 'archive'
-				? [{ name: '/aws/archived', archivedEvents: 12 }]
-				: [{ name: '/aws/app', storedBytes: 2048 }];
+			source === 'archive' ? [{ name: '/aws/archived', archivedEvents: 12 }] : cloudwatchGroups;
 		return json({ region: 'us-east-1', endpoint: null, source, groups });
 	}
 	return Promise.resolve(new Response('not found', { status: 404 }));
@@ -135,6 +151,7 @@ function lastUrl(): URL {
 
 beforeEach(() => {
 	archiveAvailable = true;
+	cloudwatchGroups = [{ name: '/aws/app', storedBytes: 2048 }];
 	requested = [];
 	FakeEventSource.urls = [];
 	mocks.replaceState.mockClear();
@@ -249,5 +266,86 @@ describe('page source switch', () => {
 		const rows = screen.getAllByTestId('group-row');
 		expect(rows).toHaveLength(1);
 		expect(rows[0].textContent).toContain('/aws/app');
+	});
+});
+
+describe('page: several groups at once', () => {
+	it('adds a group from its checkbox and streams both', async () => {
+		// Two groups in the list, one of them selected from the URL.
+		cloudwatchGroups = [
+			{ name: '/aws/app', storedBytes: 2048 },
+			{ name: '/aws/other', storedBytes: 1024 },
+		];
+		setUrl('?region=us-east-1&group=/aws/app');
+		await renderPage();
+
+		FakeEventSource.urls.length = 0;
+		// Adding a *second* group is the multi-select case.
+		await fireEvent.click(screen.getByTestId('group-check-/aws/other'));
+		await waitFor(() => expect(FakeEventSource.urls.length).toBeGreaterThan(0));
+
+		// The stream asks for both groups...
+		const streamUrl = decodeURIComponent(FakeEventSource.urls.at(-1) ?? '');
+		expect(streamUrl).toContain('groups=/aws/app,/aws/other');
+		// ...and the address bar mirrors the list, so the view is shareable.
+		expect(lastUrl().searchParams.get('groups')).toBe('/aws/app,/aws/other');
+	});
+
+	it('seeds the selection from a groups parameter in the URL', async () => {
+		setUrl('?region=us-east-1&groups=/aws/app,/aws/other');
+		await renderPage();
+		await waitFor(() => expect(FakeEventSource.urls.length).toBeGreaterThan(0));
+		expect(FakeEventSource.urls.at(-1)).toContain('groups=');
+		expect(screen.getByTestId('selected-count')).toBeTruthy();
+	});
+
+	it('replaces the selection when a row is clicked', async () => {
+		setUrl('?region=us-east-1&groups=/aws/app,/aws/other');
+		await renderPage();
+		FakeEventSource.urls.length = 0;
+		await fireEvent.click(screen.getAllByTestId('group-row')[0] as HTMLElement);
+		await waitFor(() => expect(FakeEventSource.urls.length).toBeGreaterThan(0));
+		// One group goes back to the single-group parameter.
+		expect(FakeEventSource.urls.at(-1)).toContain('group=');
+		expect(FakeEventSource.urls.at(-1)).not.toContain('groups=');
+	});
+});
+
+describe('page: the event chart', () => {
+	it('renders the chart above the log view and counts the archive window', async () => {
+		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
+		await renderPage();
+
+		expect(screen.getByTestId('event-scatter')).toBeTruthy();
+		await waitFor(() => expect(requested.some((url) => url.includes('/api/series'))).toBe(true));
+		const seriesUrl = requested.find((url) => url.includes('/api/series')) ?? '';
+		expect(seriesUrl).toContain('groups=%2Faws%2Fapp');
+		expect(seriesUrl).toContain('source=archive');
+		await waitFor(() =>
+			expect(screen.getByTestId('scatter-summary').textContent).toContain('2 events'),
+		);
+	});
+
+	it('sends the level filter to the series request', async () => {
+		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
+		await renderPage();
+		requested.length = 0;
+
+		await fireEvent.click(screen.getByTestId('level-error'));
+		await waitFor(() =>
+			expect(
+				requested.some((url) => url.includes('/api/series') && url.includes('level=error')),
+			).toBe(true),
+		);
+	});
+
+	it('buckets the streamed lines itself when the source is CloudWatch', async () => {
+		setUrl('?region=us-east-1&group=/aws/app&mode=historic&range=1h');
+		await renderPage();
+		requested.length = 0;
+		// Open the stream so it has a target, then check no series request is made.
+		await fireEvent.click(screen.getAllByTestId('group-row')[0] as HTMLElement);
+		await waitFor(() => expect(screen.getByTestId('event-scatter')).toBeTruthy());
+		expect(requested.some((url) => url.includes('/api/series'))).toBe(false);
 	});
 });

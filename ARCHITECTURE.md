@@ -21,35 +21,41 @@ Local history (optional, `source=archive`):
 
 ## Layout
 
-| Path                                      | Purpose                                                              |
-| ----------------------------------------- | -------------------------------------------------------------------- |
-| `src/lib/types.ts`                        | Wire types shared by server routes and UI                            |
-| `src/lib/regions.ts`                      | Canonical region list shared by server and browser                   |
-| `src/lib/server/env.ts`                   | Effective env: `$env/dynamic/private` + `process.env` + `.env.local` |
-| `src/lib/server/aws.ts`                   | Region/endpoint resolution, CloudWatch Logs client factory           |
-| `src/lib/server/regions.ts`               | Region list for the picker                                           |
-| `src/lib/server/log-groups.ts`            | `DescribeLogGroups` pagination                                       |
-| `src/lib/server/tail.ts`                  | Polling tail engine: cursor, de-duplication, backoff, abort          |
-| `src/lib/server/archive.ts`               | Local DuckDB archive: lazy driver, writes, reads, degradation        |
-| `src/lib/server/archive-sql.ts`           | Archive schema, statements and row mapping (no driver import)        |
-| `src/lib/server/archive-tail.ts`          | Replays the archive as the same batches the tailer yields            |
-| `src/lib/server/source.ts`                | The `source` parameter shared by both list and stream endpoints      |
-| `src/lib/server/level-filter.ts`          | The `level` parameter, and tagging live events with their level      |
-| `src/lib/server/filter.ts`                | Duration parsing (`5m`, `2h`, epoch ms, ISO 8601)                    |
-| `src/lib/server/sse.ts`                   | Server-sent event framing                                            |
-| `src/routes/api/*`                        | JSON + SSE endpoints                                                 |
-| `src/routes/api/archive/+server.ts`       | `GET /api/archive`: what the local archive holds                     |
-| `src/lib/components/*`                    | UI building blocks                                                   |
-| `src/lib/log-buffer.ts`                   | Client-side ring buffer, text filter and level detection             |
-| `src/lib/log-format.ts`                   | JSON detection, pretty-printing and tokenizing                       |
-| `src/lib/resize.ts`                       | Pure resize math and `localStorage` preference keys                  |
-| `src/lib/time-range.ts`                   | Presets, window formatting and datetime-local conversions            |
-| `src/lib/components/ColumnResizer.svelte` | Focusable drag handle for both resizable columns                     |
-| `src/lib/components/RangeControls.svelte` | Live/Historic toggle, preset chips and custom window                 |
-| `scripts/floci-env.ts`                    | Write/remove `.env.local` for the floci emulator                     |
-| `scripts/seed-floci.ts`                   | Demo log groups, backfill and live traffic                           |
-| `scripts/dev.ts`                          | Launcher: choose an AWS profile (`--profile`) or run local           |
-| `scripts/ui-smoke.ts`                     | Playwright smoke check of the log window                             |
+| Path                                          | Purpose                                                              |
+| --------------------------------------------- | -------------------------------------------------------------------- |
+| `src/lib/types.ts`                            | Wire types shared by server routes and UI                            |
+| `src/lib/regions.ts`                          | Canonical region list shared by server and browser                   |
+| `src/lib/server/env.ts`                       | Effective env: `$env/dynamic/private` + `process.env` + `.env.local` |
+| `src/lib/server/aws.ts`                       | Region/endpoint resolution, CloudWatch Logs client factory           |
+| `src/lib/server/regions.ts`                   | Region list for the picker                                           |
+| `src/lib/server/log-groups.ts`                | `DescribeLogGroups` pagination                                       |
+| `src/lib/server/tail.ts`                      | Polling tail engine: cursor, de-duplication, backoff, abort          |
+| `src/lib/server/archive.ts`                   | Local DuckDB archive: lazy driver, writes, reads, degradation        |
+| `src/lib/server/archive-sql.ts`               | Archive schema, statements and row mapping (no driver import)        |
+| `src/lib/server/archive-tail.ts`              | Replays the archive as the same batches the tailer yields            |
+| `src/lib/server/source.ts`                    | The `source` parameter shared by both list and stream endpoints      |
+| `src/lib/server/level-filter.ts`              | The `level` parameter, and tagging live events with their level      |
+| `src/lib/server/filter.ts`                    | Duration parsing (`5m`, `2h`, epoch ms, ISO 8601)                    |
+| `src/lib/server/sse.ts`                       | Server-sent event framing                                            |
+| `src/routes/api/*`                            | JSON + SSE endpoints                                                 |
+| `src/routes/api/archive/+server.ts`           | `GET /api/archive`: what the local archive holds                     |
+| `src/routes/api/series/+server.ts`            | `GET /api/series`: bucketed counts behind the chart                  |
+| `src/lib/server/multi-tail.ts`                | Merges one tail per group into the single stream the UI reads        |
+| `src/lib/server/group-params.ts`              | The `group`/`groups` selection shared by the list, stream and series |
+| `src/lib/components/*`                        | UI building blocks                                                   |
+| `src/lib/log-buffer.ts`                       | Client-side ring buffer, text filter and level detection             |
+| `src/lib/series-buckets.ts`                   | Client-side bucketing and level palettes for the chart               |
+| `src/lib/components/EventScatter.svelte`      | The scatter chart itself: the only importer of layerchart            |
+| `src/lib/components/EventScatterPanel.svelte` | Chart header, collapse toggle and the on-demand chart load           |
+| `src/lib/log-format.ts`                       | JSON detection, pretty-printing and tokenizing                       |
+| `src/lib/resize.ts`                           | Pure resize math and `localStorage` preference keys                  |
+| `src/lib/time-range.ts`                       | Presets, window formatting and datetime-local conversions            |
+| `src/lib/components/ColumnResizer.svelte`     | Focusable drag handle for both resizable columns                     |
+| `src/lib/components/RangeControls.svelte`     | Live/Historic toggle, preset chips and custom window                 |
+| `scripts/floci-env.ts`                        | Write/remove `.env.local` for the floci emulator                     |
+| `scripts/seed-floci.ts`                       | Demo log groups, backfill and live traffic                           |
+| `scripts/dev.ts`                              | Launcher: choose an AWS profile (`--profile`) or run local           |
+| `scripts/ui-smoke.ts`                         | Playwright smoke check of the log window                             |
 
 ## HTTP API
 
@@ -273,6 +279,59 @@ The archive is one DuckDB file with a single writer: the server process holds th
 serialised through an internal queue, and a failure (a full disk, a locked file) is recorded and
 reported by `/api/archive` rather than interrupting a stream.
 
+## Several log groups, and the chart
+
+A view can hold more than one log group. `group=a` and `groups=a,b,c` are both accepted by
+`/api/stream`, `/api/log-groups` and `/api/series`; the list is de-duplicated, capped at 10 and parsed by
+`src/lib/server/group-params.ts`. Every streamed event carries its own `group`, which is what labels the
+group column in the viewer and what files each batch under the right group in the archive.
+
+The two sources provide several groups differently:
+
+| Source       | How several groups are read                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `archive`    | one SQL statement per page, `WHERE log_group IN (...)`                                                              |
+| `cloudwatch` | one `FilterLogEvents` poll loop per group, merged by `mergeTails` so a busy group is never held back by a quiet one |
+
+### The chart (`GET /api/series`, `EventScatterPanel` and `EventScatter`)
+
+The scatter chart above the log view plots event counts over time: X is time, Y is the number of events
+in a bucket, and there is one series per log level. Dragging across it brushes a time range; the page
+turns that into the next historic window, so the log view re-scopes to exactly the brushed range, and
+`?from=&to=` in the URL follows. A click clears the brush, and the "Reset zoom" control clears it and
+returns to the preset window.
+
+Only the archive can count a whole window server-side, so the chart gets its data two ways:
+
+- `source=archive` calls `GET /api/series?region=&groups=&from=&to=&level=&bucket=`, which runs one
+  `GROUP BY` over `log_events`. The bucket is integer arithmetic on `timestamp_ms`
+  (`floor(timestamp_ms / bucketMs) * bucketMs`), so it never drifts with a time zone; NULL levels are
+  counted as `unknown` rather than dropped; and the window is **not** clamped to CloudWatch's 14 days.
+  `bucket` accepts a duration or milliseconds and is otherwise chosen from a ladder so a window lands
+  under ~90 buckets.
+- `source=cloudwatch` buckets the events the view has already streamed (`bucketEvents`), because
+  CloudWatch Logs has no aggregate API. The chart then describes exactly what the log view holds.
+
+Both paths produce `SeriesPoint[]`, so the component has one data contract, and the level filter is
+applied in both: the archive query filters rows with `level IN (...)` (so `NULL` rows are left out), and
+the client-side path filters before counting.
+
+The panel and the chart are two components on purpose. `EventScatterPanel` renders the header
+(title, totals, per-level legend, brush hint) and owns a collapse toggle whose choice is stored under
+`watch-stream:chart-open`; `EventScatter` imports layerchart and draws the chart. The panel fetches the
+chart module with a **dynamic import** the first time it is open, so layerchart is never part of the
+first load - measured on the production build, an open panel requests ~235 KiB of chart code after the
+page has started and a collapsed one requests none. The loader is injectable (`loadChart`), which is how
+the panel is tested without depending on the bundler. "Reset zoom" remounts the chart with `{#key}`,
+which is what clears a brush without holding an imperative handle on a lazily loaded component.
+
+Two layerchart 2.5 behaviours shape the chart: it must render only in the browser (its `ssr: true` path
+overflows the stack, so the default is kept and the server sends only the wrapper, into which the chart
+appears after hydration), and per-axis configuration belongs in `props={{ xAxis, yAxis }}` because an
+`axis={{ x, y }}` object is silently ignored. The brush reports a domain pair of `Date`s, which the
+component converts to epoch milliseconds, with a 30-second `minExtent` so a small drag cannot zoom to a
+sliver.
+
 ## Region resolution
 
 The region is resolved in this order:
@@ -301,6 +360,8 @@ never sent to the SDK.
 | `missing-region`       | 502    | No region could be resolved from the parameter or AWS config       |
 | `invalid-source`       | 400    | `source` is neither `cloudwatch` nor `archive`                     |
 | `invalid-level`        | 400    | `level` is not a known level, or was used with `source=cloudwatch` |
+| `too-many-groups`      | 400    | `groups` names more than 10 log groups                             |
+| `unsupported-source`   | 400    | `/api/series` was asked for a source it cannot aggregate           |
 | `missing-region-param` | 400    | `source=archive` without a region (archived rows are per region)   |
 | `missing-credentials`  | 502    | No credentials could be resolved for a real AWS endpoint           |
 | `access-denied`        | 502    | CloudWatch Logs refused the call                                   |

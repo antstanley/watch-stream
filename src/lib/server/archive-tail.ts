@@ -31,7 +31,8 @@ export const DEFAULT_ARCHIVE_MAX_EVENTS = 10_000;
 export type ArchivedTailOptions = {
 	archive: ArchivePageSource;
 	region: string;
-	logGroup: string;
+	/** Log groups to replay; all of them are read in one pass. */
+	logGroups: readonly string[];
 	/** Inclusive start of the window, epoch ms. */
 	startTime: number;
 	/** Inclusive end of the window, epoch ms. */
@@ -68,7 +69,7 @@ export async function* tailArchivedEvents(
 	const {
 		archive,
 		region,
-		logGroup,
+		logGroups,
 		startTime,
 		endTime,
 		search = null,
@@ -107,7 +108,7 @@ export async function* tailArchivedEvents(
 		if (signal?.aborted === true) return;
 		const page = await archive.page({
 			region,
-			logGroup,
+			logGroups,
 			startTime,
 			endTime,
 			search,

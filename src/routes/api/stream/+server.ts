@@ -14,12 +14,15 @@ import {
 } from '$lib/server/aws';
 import { readEnv } from '$lib/server/env';
 import { clampPollMs, resolveWindow } from '$lib/server/filter';
+import { parseGroupParams } from '$lib/server/group-params';
+import { mergeTails } from '$lib/server/multi-tail';
 import { SOURCE_PARAM_HINT, parseSourceParam } from '$lib/server/source';
 import { sseFrame } from '$lib/server/sse';
 import { tailLogEvents, type TailBatch } from '$lib/server/tail';
 import { LEVEL_PARAM_HINT, parseLevelParam, withLevels } from '$lib/server/level-filter';
 import type { LogLevel } from '$lib/log-buffer';
 import type {
+	LogEventDto,
 	StreamEndPayload,
 	StreamErrorPayload,
 	StreamLogPayload,
@@ -44,10 +47,59 @@ const SSE_HEADERS: Record<string, string> = {
 	'x-accel-buffering': 'no',
 };
 
+/**
+ * Tags every event of one tail with its log group.
+ *
+ * A merged multi-group stream has to say which group each line came from, both
+ * for the archive and for the group column in the viewer.
+ */
+async function* taggedEvents(
+	source: AsyncGenerator<TailBatch, void, void>,
+	group: string,
+): AsyncGenerator<TailBatch, void, void> {
+	for await (const batch of source) {
+		if (batch.type !== 'events') {
+			yield batch;
+			continue;
+		}
+		const events: LogEventDto[] = [];
+		for (const event of batch.events) events.push({ ...event, group });
+		yield { type: 'events', events };
+	}
+}
+
+/**
+ * Writes one batch to the archive, under the right group.
+ *
+ * A merged multi-group stream tags every event with its own group, so a batch
+ * that mixes groups is split; a single-group stream falls back to the group the
+ * request named.
+ */
+async function recordBatch(
+	archive: LogArchive,
+	region: string,
+	groupNames: readonly string[],
+	events: readonly LogEventDto[],
+): Promise<void> {
+	const fallback = groupNames[0] ?? '';
+	const byGroup = new Map<string, LogEventDto[]>();
+	for (const event of events) {
+		const group = event.group ?? fallback;
+		const bucket = byGroup.get(group);
+		if (bucket === undefined) byGroup.set(group, [event]);
+		else bucket.push(event);
+	}
+	for (const [group, groupEvents] of byGroup) {
+		await archive.record(region, group, groupEvents);
+	}
+}
+
 /** One request's event feed plus the resources it owns. */
 type Feed = {
 	/** Region the feed reads, resolved for the response. */
 	region: string;
+	/** Log groups the feed covers, in request order. */
+	groupNames: readonly string[];
 	/** Batch generator the pump pulls from. */
 	generator: AsyncGenerator<TailBatch, void, void>;
 	/** Releases what the feed opened; called once, when the stream ends. */
@@ -59,7 +111,8 @@ type FeedRequest = {
 	source: StreamSource;
 	config: AwsConfig;
 	env: Record<string, string | undefined>;
-	logGroupName: string;
+	/** Log groups this feed covers; more than one is merged. */
+	groupNames: readonly string[];
 	startTime: number;
 	/** Inclusive end of a historic window, or `null` for a live tail. */
 	endTime: number | null;
@@ -104,7 +157,7 @@ function parseBoundedInt(
  * route returns unchanged.
  */
 async function resolveFeed(request: FeedRequest): Promise<Feed | Response> {
-	const { source, config, env, logGroupName, startTime, endTime, signal } = request;
+	const { source, config, env, groupNames, startTime, endTime, signal } = request;
 
 	if (source === 'archive') {
 		const region = config.region ?? '';
@@ -118,10 +171,11 @@ async function resolveFeed(request: FeedRequest): Promise<Feed | Response> {
 		const archive: LogArchive = await getArchive(env);
 		return {
 			region,
+			groupNames,
 			generator: tailArchivedEvents({
 				archive,
 				region,
-				logGroup: logGroupName,
+				logGroups: groupNames,
 				startTime,
 				endTime: endTime ?? Date.now(),
 				search: request.search,
@@ -151,18 +205,27 @@ async function resolveFeed(request: FeedRequest): Promise<Feed | Response> {
 		const described = describeAwsError(error);
 		return apiError(502, described.message, described.code);
 	}
+	// One group reads one call, so a multi-group view runs a tail per group and
+	// merges them into a single batch stream.
+	const tails = groupNames.map((group) =>
+		taggedEvents(
+			tailLogEvents({
+				client,
+				logGroupName: group,
+				startTime,
+				endTime,
+				pollIntervalMs: request.pollIntervalMs,
+				filterPattern: request.filterPattern,
+				signal,
+				maxConsecutiveErrors: MAX_CONSECUTIVE_ERRORS,
+			}),
+			group,
+		),
+	);
 	return {
 		region,
-		generator: tailLogEvents({
-			client,
-			logGroupName,
-			startTime,
-			endTime,
-			pollIntervalMs: request.pollIntervalMs,
-			filterPattern: request.filterPattern,
-			signal,
-			maxConsecutiveErrors: MAX_CONSECUTIVE_ERRORS,
-		}),
+		groupNames,
+		generator: mergeTails(tails),
 		release: () => client.destroy(),
 	};
 }
@@ -179,10 +242,12 @@ async function resolveFeed(request: FeedRequest): Promise<Feed | Response> {
  * is removed so the dev server can exit.
  */
 export const GET = async ({ url, request }: RequestEvent): Promise<Response> => {
-	const logGroupName = url.searchParams.get('group')?.trim() ?? '';
-	if (logGroupName.length === 0) {
-		return apiError(400, 'Query parameter "group" is required', 'missing-group');
-	}
+	const groupSelection = parseGroupParams(
+		url.searchParams.get('group'),
+		url.searchParams.get('groups'),
+	);
+	if (!groupSelection.ok) return apiError(400, groupSelection.message, groupSelection.code);
+	const groupNames = groupSelection.names;
 
 	const parsedRegion = parseRegionParam(url.searchParams.get('region'));
 	if (!parsedRegion.ok) return apiError(400, REGION_PARAM_HINT, 'invalid-region');
@@ -203,16 +268,21 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 			'invalid-level',
 		);
 	}
-	const streamWindow = resolveWindow({
-		// The archive holds a fixed window, so a request without a mode is historic.
-		mode: url.searchParams.get('mode') ?? (source === 'archive' ? 'historic' : null),
-		range: url.searchParams.get('range'),
-		from: url.searchParams.get('from'),
-		to: url.searchParams.get('to'),
-		startTime: url.searchParams.get('startTime'),
-		lookback: url.searchParams.get('lookback'),
-		now: Date.now(),
-	});
+	const streamWindow = resolveWindow(
+		{
+			// The archive holds a fixed window, so a request without a mode is historic.
+			mode: url.searchParams.get('mode') ?? (source === 'archive' ? 'historic' : null),
+			range: url.searchParams.get('range'),
+			from: url.searchParams.get('from'),
+			to: url.searchParams.get('to'),
+			startTime: url.searchParams.get('startTime'),
+			lookback: url.searchParams.get('lookback'),
+			now: Date.now(),
+			// The archive holds data CloudWatch has already forgotten, so its windows
+			// are not clamped to 14 days.
+		},
+		source === 'archive' ? { maxLookbackMs: null } : {},
+	);
 	if (!streamWindow.ok) return apiError(400, streamWindow.message, streamWindow.code);
 	if (source === 'archive' && streamWindow.mode === 'live') {
 		return apiError(
@@ -227,7 +297,7 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 		source,
 		config,
 		env,
-		logGroupName,
+		groupNames,
 		startTime: streamWindow.startTime,
 		endTime: streamWindow.endTime,
 		filterPattern,
@@ -329,8 +399,10 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 					consecutiveErrors = 0;
 					enqueue(sseFrame('log', payload));
 					// Archiving is part of the stream: awaiting keeps the order and lets
-					// the archive serialise its own writes. It never throws.
-					if (archive !== null) await archive.record(feed.region, logGroupName, events);
+					// the archive serialise its own writes. It never throws. A merged
+					// multi-group stream tags each event with its own group, so the rows
+					// land under the right log group.
+					if (archive !== null) await recordBatch(archive, feed.region, feed.groupNames, events);
 				} else if (batch.type === 'end') {
 					// A finite (historic) window reports why it finished; a live tail
 					// only ends because the client went away.
@@ -366,7 +438,8 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 			streamController = controller;
 			const payload: StreamReadyPayload = {
 				region: feed.region,
-				logGroupName,
+				logGroupName: feed.groupNames[0] ?? '',
+				groups: [...feed.groupNames],
 				// The archive reads a local file, so there is no AWS endpoint to report.
 				endpoint: source === 'archive' ? null : config.endpoint,
 				source,

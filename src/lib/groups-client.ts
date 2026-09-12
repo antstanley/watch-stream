@@ -12,6 +12,7 @@ import type {
 	LogGroupSummary,
 	LogGroupsResponse,
 	RegionsResponse,
+	SeriesResponse,
 	StreamSource,
 } from './types';
 
@@ -39,6 +40,21 @@ export type LogGroupsQuery = RequestOptions & {
 	source?: StreamSource;
 	prefix?: string;
 	limit?: number;
+};
+
+/** Options for {@link fetchSeries}. */
+export type SeriesQuery = RequestOptions & {
+	region: string;
+	/** Log groups to count; one or many. */
+	groups: readonly string[];
+	/** Inclusive start of the window, epoch ms. */
+	from: number;
+	/** Inclusive end of the window, epoch ms. */
+	to: number;
+	/** Levels to count; empty or omitted counts every level. */
+	levels?: readonly string[];
+	/** Explicit bucket width in ms, or omitted for the server's automatic width. */
+	bucketMs?: number;
 };
 
 /** Error carrying the parsed `ApiErrorBody` returned by the API. */
@@ -95,6 +111,39 @@ export function buildLogGroupsUrl(query: {
 	}
 	const suffix = search.toString();
 	return suffix === '' ? '/api/log-groups' : `/api/log-groups?${suffix}`;
+}
+
+/** Builds the `/api/series` URL for a query. */
+function buildSeriesUrl(query: {
+	region?: string;
+	groups?: readonly string[];
+	from?: number;
+	to?: number;
+	levels?: readonly string[];
+	bucketMs?: number;
+}): string {
+	const search = new URLSearchParams();
+	if (query.region) search.set('region', query.region);
+	search.set('source', 'archive');
+	const groups = (query.groups ?? []).filter((name) => name.length > 0);
+	if (groups.length > 0) search.set('groups', groups.join(','));
+	if (typeof query.from === 'number' && Number.isFinite(query.from)) {
+		search.set('from', String(Math.round(query.from)));
+	}
+	if (typeof query.to === 'number' && Number.isFinite(query.to)) {
+		search.set('to', String(Math.round(query.to)));
+	}
+	const levels = (query.levels ?? []).filter((level) => level.length > 0);
+	if (levels.length > 0) search.set('level', levels.join(','));
+	if (typeof query.bucketMs === 'number' && Number.isFinite(query.bucketMs) && query.bucketMs > 0) {
+		search.set('bucket', String(Math.round(query.bucketMs)));
+	}
+	return `/api/series?${search.toString()}`;
+}
+
+/** `GET /api/series` - bucketed event counts for the chart. */
+export function fetchSeries(query: SeriesQuery): Promise<SeriesResponse> {
+	return getJson<SeriesResponse>(buildSeriesUrl(query), query);
 }
 
 /** True for an abort, which is a normal way to cancel a request. */

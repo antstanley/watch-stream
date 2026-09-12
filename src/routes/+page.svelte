@@ -3,6 +3,7 @@
 	import { replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import EndpointBadge from '$lib/components/EndpointBadge.svelte';
+	import EventScatterPanel from '$lib/components/EventScatterPanel.svelte';
 	import ColumnResizer from '$lib/components/ColumnResizer.svelte';
 	import RangeControls from '$lib/components/RangeControls.svelte';
 	import LogGroupList from '$lib/components/LogGroupList.svelte';
@@ -17,7 +18,10 @@
 		fetchHealth,
 		fetchLogGroups,
 		fetchRegions,
+		fetchSeries,
 	} from '$lib/groups-client';
+	import type { LogLevel } from '$lib/log-buffer';
+	import { bucketEvents, isMeaningfulBrush } from '$lib/series-buckets';
 	import { LogStream } from '$lib/log-stream.svelte';
 	import type { StreamTarget } from '$lib/log-stream.svelte';
 	import type { LogMode } from '$lib/time-range';
@@ -25,7 +29,9 @@
 	import type {
 		ArchiveStatusResponse,
 		HealthResponse,
+		LogEventDto,
 		LogGroupSummary,
+		SeriesPoint,
 		StreamSource,
 	} from '$lib/types';
 
@@ -61,8 +67,21 @@
 	let filter = $state('');
 	let autoScroll = $state(true);
 
-	/** Group currently being tailed, or `null`. */
-	let selectedGroup = $derived(stream.target?.group ?? null);
+	/**
+	 * Log groups in the view, seeded from the URL. One entry is the normal case;
+	 * more than one tails them together and adds a group column.
+	 */
+	let selectedGroups = $state<string[]>(parseUrlGroups(page.url.searchParams));
+	/** Primary group: the one the viewer names the view after. */
+	let selectedGroup = $derived(selectedGroups[0] ?? null);
+	/** Level filter shared by the log view and the chart. */
+	let levelFilter = $state<LogLevel | null>(null);
+	/** Bucketed counts behind the chart. */
+	let seriesPoints = $state<SeriesPoint[]>([]);
+	/** True while the archive counts are being fetched. */
+	let seriesLoading = $state(false);
+	/** The chart's own reset handle, for clearing a brush. */
+	let scatter = $state<{ reset: () => void } | null>(null);
 	/** True only when the local archive reports that it can be read. */
 	let archiveAvailable = $derived(archiveStatus?.available === true);
 	/** Database file behind the archive, or `null` when it is unknown. */
@@ -127,9 +146,10 @@
 		};
 	});
 
-	/** Loads metadata, the archive status and the groups, then auto-selects the URL group. */
+	/** Loads metadata, the archive status and the groups, then auto-selects the URL groups. */
 	async function bootstrap(): Promise<void> {
-		const requestedGroup = page.url.searchParams.get('group');
+		// A shared link may name one group or several; both start the view straight away.
+		const requestedGroups = parseUrlGroups(page.url.searchParams);
 		await loadMeta();
 		await loadArchiveStatus();
 		// A link may ask for the archive on a machine that cannot read it: fall back to CloudWatch,
@@ -141,11 +161,13 @@
 		// The archive only replays fixed windows, so live is never the mode for it.
 		if (source === 'archive') mode = 'historic';
 		await loadGroups(region);
-		if (requestedGroup !== null && requestedGroup !== '') {
+		if (requestedGroups.length > 0) {
 			rangeLoading = mode === 'historic';
-			selectGroup(requestedGroup);
+			selectedGroups = requestedGroups;
+			restartStream();
+			syncUrl(region, selectedGroups);
 		} else {
-			syncUrl(region, null);
+			syncUrl(region, selectedGroups);
 		}
 	}
 
@@ -224,19 +246,57 @@
 		return { mode: 'historic', range: range === '' ? '15m' : range };
 	}
 
-	/** Stream target for the active source, region and window. */
-	function streamTarget(name: string): StreamTarget {
+	/** Stream target for the active source, region, groups and window. */
+	function streamTarget(): StreamTarget {
 		const window = windowParams();
-		return source === 'archive'
-			? { region, group: name, source: 'archive', ...window }
-			: { region, group: name, ...window };
+		const [primary, ...rest] = selectedGroups;
+		const target: StreamTarget = {
+			region,
+			group: primary ?? '',
+			groups: [...selectedGroups],
+			...window,
+		};
+		if (source === 'archive') target.source = 'archive';
+		return target;
 	}
 
-	/** Starts tailing a group with the active source, mode and window. */
+	/** Starts the stream for the current selection, or stops it when nothing is selected. */
+	function restartStream(): void {
+		if (region === '' || selectedGroups.length === 0) {
+			stream.stop();
+			return;
+		}
+		rangeLoading = mode === 'historic';
+		stream.start(streamTarget());
+		void loadSeries();
+	}
+
+	/** Selects one group, replacing the selection. */
 	function selectGroup(name: string): void {
 		if (region === '' || name === '') return;
-		stream.start(streamTarget(name));
-		syncUrl(region, name);
+		selectedGroups = [name];
+		syncUrl(region, selectedGroups);
+		restartStream();
+	}
+
+	/**
+	 * Adds a group to the selection or removes it.
+	 *
+	 * The view keeps at least the groups it had: removing the last one leaves the
+	 * stream stopped and the list without a selection, which is a valid state.
+	 */
+	function toggleGroup(name: string): void {
+		if (region === '' || name === '') return;
+		selectedGroups = selectedGroups.includes(name)
+			? selectedGroups.filter((entry) => entry !== name)
+			: [...selectedGroups, name];
+		syncUrl(region, selectedGroups);
+		if (selectedGroups.length === 0) {
+			stream.stop();
+			seriesPoints = [];
+			return;
+		}
+		restartStream();
 	}
 
 	/** Applies a mode or range change: restarts the stream and mirrors it into the URL. */
@@ -252,10 +312,34 @@
 		range = payload.range;
 		windowFrom = payload.from;
 		windowTo = payload.to;
-		syncUrl(region, selectedGroup);
-		if (selectedGroup === null) return;
+		syncUrl(region, selectedGroups);
+		if (selectedGroups.length === 0) return;
 		rangeLoading = payload.mode === 'historic';
-		stream.start(streamTarget(selectedGroup));
+		stream.start(streamTarget());
+		void loadSeries();
+	}
+
+	/**
+	 * Applies a brushed range from the chart as the new historic window, which
+	 * re-scopes the log view to exactly what was brushed.
+	 */
+	function applyBrush(selection: { from: number; to: number } | null): void {
+		if (selection === null) return;
+		// A click that moved a couple of pixels still produces a range, and a double
+		// click selects the whole domain. Neither is a zoom, and acting on one would
+		// re-scope the log view to a window with nothing in it.
+		const window = chartWindow();
+		if (!isMeaningfulBrush(selection, window, chartBucketMs(window.from, window.to))) {
+			scatter?.reset();
+			return;
+		}
+		applyRange({ mode: 'historic', range: '', from: selection.from, to: selection.to });
+	}
+
+	/** Clears the chart's brush and the window it applied. */
+	function clearBrush(): void {
+		scatter?.reset();
+		applyRange({ mode: 'historic', range: range === '' ? '15m' : range, from: null, to: null });
 	}
 
 	/**
@@ -276,13 +360,14 @@
 				windowTo = null;
 			}
 		}
-		if (selectedGroup !== null) {
+		if (selectedGroups.length > 0) {
 			rangeLoading = mode === 'historic';
-			stream.start(streamTarget(selectedGroup));
+			stream.start(streamTarget());
 		}
 		groups = [];
-		syncUrl(region, selectedGroup);
+		syncUrl(region, selectedGroups);
 		void loadGroups(region);
+		void loadSeries();
 	}
 
 	/** Re-reads the archive status and returns to CloudWatch when it disappeared mid-session. */
@@ -290,10 +375,11 @@
 		await loadArchiveStatus();
 		if (source !== 'archive' || archiveAvailable) return;
 		source = 'cloudwatch';
-		if (selectedGroup !== null) stream.start(streamTarget(selectedGroup));
+		if (selectedGroups.length > 0) stream.start(streamTarget());
 		groups = [];
-		syncUrl(region, selectedGroup);
+		syncUrl(region, selectedGroups);
 		void loadGroups(region);
+		void loadSeries();
 	}
 
 	/** Switches region: stops the stream, clears the list and reloads the groups. */
@@ -302,7 +388,9 @@
 		region = next;
 		stream.stop();
 		groups = [];
-		syncUrl(next, null);
+		selectedGroups = [];
+		seriesPoints = [];
+		syncUrl(next, []);
 		void loadGroups(next);
 	}
 
@@ -312,15 +400,19 @@
 	}
 
 	/** Replaces the view parameters in the address bar. */
-	function syncUrl(nextRegion: string, nextGroup: string | null): void {
+	function syncUrl(nextRegion: string, nextGroups: readonly string[]): void {
 		const url = new URL(page.url);
 		if (nextRegion === '') url.searchParams.delete('region');
 		else url.searchParams.set('region', nextRegion);
 		// CloudWatch is the server default, so only the archive names its source in the URL.
 		if (source === 'archive') url.searchParams.set('source', 'archive');
 		else url.searchParams.delete('source');
-		if (nextGroup === null || nextGroup === '') url.searchParams.delete('group');
-		else url.searchParams.set('group', nextGroup);
+		// One group keeps the short, familiar parameter; several use the list form.
+		url.searchParams.delete('group');
+		url.searchParams.delete('groups');
+		const names = nextGroups.filter((name) => name.length > 0);
+		if (names.length === 1) url.searchParams.set('group', names[0] as string);
+		else if (names.length > 1) url.searchParams.set('groups', names.join(','));
 
 		if (mode === 'live') {
 			url.searchParams.delete('mode');
@@ -348,6 +440,29 @@
 	});
 
 	/**
+	 * Keeps the chart in step with the view: a new window, selection, source, level
+	 * or a new batch of lines all re-load the counts.
+	 */
+	$effect(() => {
+		// Read the reactive inputs so the effect re-runs when any of them change.
+		const key = [
+			source,
+			region,
+			selectedGroups.join(','),
+			mode,
+			range,
+			windowFrom ?? '',
+			windowTo ?? '',
+			levelFilter ?? '',
+			stream.receivedCount,
+			stream.ready?.startTime ?? '',
+			stream.ready?.endTime ?? '',
+		].join('|');
+		if (key.length === 0) return;
+		void loadSeries();
+	});
+
+	/**
 	 * Reacts to `archive-unavailable` from the stream (the file was locked or removed after boot) by
 	 * re-checking the archive, so the toggle hides itself instead of offering a source that fails.
 	 */
@@ -355,6 +470,77 @@
 		if (stream.lastError?.code !== 'archive-unavailable') return;
 		void handleArchiveGone();
 	});
+
+	/** Parses the group selection from the URL, accepting both parameter shapes. */
+	function parseUrlGroups(params: URLSearchParams): string[] {
+		const list = params.get('groups') ?? '';
+		const names = list
+			.split(',')
+			.map((name) => name.trim())
+			.filter((name) => name.length > 0);
+		if (names.length > 0) return [...new Set(names)];
+		const single = params.get('group')?.trim() ?? '';
+		return single.length > 0 ? [single] : [];
+	}
+
+	/** Bucket width for the chart of one window, mirroring the server's choice. */
+	function chartBucketMs(from: number, to: number): number {
+		const span = Math.max(1, to - from);
+		const ladder = [1_000, 5_000, 10_000, 30_000, 60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000];
+		return ladder.find((step) => span / step <= 90) ?? 60 * 60_000;
+	}
+
+	/** Window the chart describes: the active historic window, or a rolling quarter hour. */
+	function chartWindow(): { from: number; to: number } {
+		if (mode === 'historic') {
+			const to = windowTo ?? stream.ready?.endTime ?? Date.now();
+			const from = windowFrom ?? stream.ready?.startTime ?? to - 15 * 60_000;
+			return { from: Math.min(from, to - 1_000), to };
+		}
+		const to = Date.now();
+		return { from: to - 15 * 60_000, to };
+	}
+
+	/**
+	 * Loads the counts behind the chart.
+	 *
+	 * The archive can count a whole window in one statement, so it is asked for
+	 * them; a CloudWatch view has no aggregate endpoint, so the events already
+	 * streamed are bucketed here. Both end up as the same points.
+	 */
+	async function loadSeries(): Promise<void> {
+		if (selectedGroups.length === 0 || region === '') {
+			seriesPoints = [];
+			return;
+		}
+		const { from, to } = chartWindow();
+		if (source !== 'archive') {
+			seriesPoints = bucketEvents(stream.lines as LogEventDto[], {
+				from,
+				to,
+				bucketMs: chartBucketMs(from, to),
+				level: levelFilter,
+				fallbackGroup: selectedGroup ?? '',
+			});
+			return;
+		}
+		seriesLoading = true;
+		try {
+			const series = await fetchSeries({
+				region,
+				groups: selectedGroups,
+				from,
+				to,
+				levels: levelFilter === null ? [] : [levelFilter],
+			});
+			seriesPoints = series.points;
+		} catch {
+			// The chart is a convenience: a failed count leaves the view alone.
+			seriesPoints = [];
+		} finally {
+			seriesLoading = false;
+		}
+	}
 
 	/** Short description of an unknown failure. */
 	function failureText(error: unknown): string {
@@ -426,10 +612,11 @@
 			{groups}
 			{source}
 			{region}
-			selected={selectedGroup}
+			selected={selectedGroups}
 			loading={groupsLoading}
 			error={groupsError}
 			onSelect={selectGroup}
+			onToggle={toggleGroup}
 			onRefresh={refreshGroups}
 		/>
 	</div>
@@ -446,6 +633,35 @@
 	/>
 
 	<div class="flex min-h-0 min-w-0 flex-1 flex-col">
+		<EventScatterPanel
+			bind:this={scatter}
+			points={seriesPoints}
+			from={chartWindow().from}
+			to={chartWindow().to}
+			bucketMs={chartBucketMs(chartWindow().from, chartWindow().to)}
+			groups={selectedGroups}
+			loading={seriesLoading}
+			onBrush={applyBrush}
+		/>
+
+		{#if windowFrom !== null && windowTo !== null && mode === 'historic'}
+			<div class="flex flex-wrap items-center gap-2 text-[0.6875rem] text-neutral-500">
+				<span data-testid="brush-window">
+					zoomed to {new Date(windowFrom).toLocaleTimeString()} – {new Date(
+						windowTo,
+					).toLocaleTimeString()}
+				</span>
+				<button
+					type="button"
+					onclick={clearBrush}
+					data-testid="brush-clear"
+					class="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 font-medium text-neutral-300 transition-colors hover:border-neutral-700 hover:text-neutral-100"
+				>
+					Reset zoom
+				</button>
+			</div>
+		{/if}
+
 		<LogViewer
 			lines={stream.lines}
 			status={stream.status}
@@ -456,6 +672,9 @@
 			{archivePath}
 			{region}
 			group={selectedGroup}
+			groups={selectedGroups}
+			level={levelFilter}
+			onLevelChange={(next) => (levelFilter = next)}
 			{filter}
 			paused={stream.paused}
 			{autoScroll}

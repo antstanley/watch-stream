@@ -152,3 +152,100 @@ describe('LogGroupList archive view', () => {
 		expect(empty.className).not.toContain('red');
 	});
 });
+
+describe('LogGroupList multi-select', () => {
+	it('renders one checkbox per row, all unchecked when nothing is selected', () => {
+		render(LogGroupList, { props: { groups: GROUPS, region: 'us-east-1', selected: [] } });
+
+		const boxes = screen.getAllByTestId(/^group-check-/);
+		expect(boxes).toHaveLength(2);
+		expect(boxes.every((box) => (box as HTMLInputElement).checked === false)).toBe(true);
+		// Each checkbox carries an accessible name for its group.
+		expect(
+			(screen.getByLabelText('Include /aws/lambda/checkout in the selection') as HTMLInputElement)
+				.checked,
+		).toBe(false);
+		expect(screen.queryByTestId('selected-count')).toBeNull();
+	});
+
+	it('clicking a row selects only that group and does not toggle', async () => {
+		const onSelect = vi.fn<(name: string) => void>();
+		const onToggle = vi.fn<(name: string) => void>();
+		render(LogGroupList, {
+			props: { groups: GROUPS, region: 'us-east-1', selected: [], onSelect, onToggle },
+		});
+
+		await fireEvent.click(screen.getByText('/aws/lambda/orders'));
+
+		expect(onSelect).toHaveBeenCalledTimes(1);
+		expect(onSelect).toHaveBeenCalledWith('/aws/lambda/orders');
+		expect(onToggle).not.toHaveBeenCalled();
+	});
+
+	it('clicking a checkbox toggles that group and does not select the row', async () => {
+		const onSelect = vi.fn<(name: string) => void>();
+		const onToggle = vi.fn<(name: string) => void>();
+		render(LogGroupList, {
+			props: { groups: GROUPS, region: 'us-east-1', selected: [], onSelect, onToggle },
+		});
+
+		await fireEvent.click(screen.getByTestId('group-check-/aws/lambda/orders'));
+
+		expect(onToggle).toHaveBeenCalledTimes(1);
+		expect(onToggle).toHaveBeenCalledWith('/aws/lambda/orders');
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
+	it('highlights every selected group and reports how many are selected', () => {
+		render(LogGroupList, {
+			props: {
+				groups: GROUPS,
+				region: 'us-east-1',
+				selected: ['/aws/lambda/checkout', '/aws/lambda/orders'],
+			},
+		});
+
+		const rows = screen.getAllByTestId('group-row');
+		expect(rows).toHaveLength(2);
+		for (const row of rows) {
+			expect(row.className).toContain('border-sky-800');
+			expect(row.getAttribute('aria-current')).toBe('true');
+		}
+		expect(
+			(screen.getByTestId('group-check-/aws/lambda/checkout') as HTMLInputElement).checked,
+		).toBe(true);
+		expect((screen.getByTestId('group-check-/aws/lambda/orders') as HTMLInputElement).checked).toBe(
+			true,
+		);
+		expect(screen.getByTestId('selected-count').textContent?.trim()).toBe('2 selected');
+	});
+
+	it('leaves unselected rows unhighlighted in a multi-selection', () => {
+		render(LogGroupList, {
+			props: { groups: GROUPS, region: 'us-east-1', selected: ['/aws/lambda/orders'] },
+		});
+
+		const rows = screen.getAllByTestId('group-row');
+		expect(rows[0].className).not.toContain('border-sky-800');
+		expect(rows[0].getAttribute('aria-current')).toBeNull();
+		expect(rows[1].className).toContain('border-sky-800');
+		// A single selection keeps the header unchanged.
+		expect(screen.queryByTestId('selected-count')).toBeNull();
+	});
+
+	it('keeps the archived count pill with checkboxes present', () => {
+		render(LogGroupList, { props: { groups: ARCHIVED, region: 'us-east-1', source: 'archive' } });
+
+		expect(screen.getAllByTestId('group-archived-count')).toHaveLength(1);
+		expect(screen.getAllByTestId(/^group-check-/)).toHaveLength(2);
+	});
+
+	it('keeps the archive empty state', () => {
+		render(LogGroupList, { props: { groups: [], region: 'eu-west-1', source: 'archive' } });
+
+		expect(screen.getByTestId('group-empty').textContent).toContain(
+			'Nothing archived for eu-west-1 yet',
+		);
+		expect(screen.queryAllByTestId(/^group-check-/)).toHaveLength(0);
+	});
+});

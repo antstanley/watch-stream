@@ -193,7 +193,7 @@ describe('LogArchive.open', () => {
 		expect(
 			await archive.page({
 				region: 'us-east-1',
-				logGroup: '/g',
+				logGroups: ['/g'],
 				startTime: 0,
 				endTime: TS,
 				limit: 10,
@@ -315,13 +315,20 @@ describe('LogArchive reads', () => {
 		});
 		const page = await archive.page({
 			region: 'us-east-1',
-			logGroup: '/g',
+			logGroups: ['/g'],
 			startTime: TS,
 			endTime: TS + 1000,
 			limit: 5,
 		});
 		expect(page.events).toEqual([
-			{ id: 'evt-1', timestamp: TS, message: 'hello', streamName: 's-1', level: 'error' },
+			{
+				id: 'evt-1',
+				timestamp: TS,
+				message: 'hello',
+				streamName: 's-1',
+				level: 'error',
+				group: '/g',
+			},
 		]);
 		expect(page.last).toEqual({ timestamp: TS, seq: 4 });
 	});
@@ -438,7 +445,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 
 			const first = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS,
 				endTime: TS + 10,
 				limit: 2,
@@ -449,7 +456,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 			// Equal timestamps must not repeat or skip: the cursor breaks the tie.
 			const second = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS,
 				endTime: TS + 10,
 				after: first.last,
@@ -459,7 +466,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 
 			const searched = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS,
 				endTime: TS + 10,
 				search: 'error',
@@ -469,7 +476,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 
 			const literal = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS,
 				endTime: TS + 10,
 				search: '%',
@@ -489,7 +496,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 			]);
 			const all = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS + 4,
 				endTime: TS + 6,
 				limit: 10,
@@ -502,7 +509,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 
 			const onlyErrors = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS,
 				endTime: TS + 10,
 				levels: ['error'],
@@ -514,7 +521,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 
 			const warnings = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS,
 				endTime: TS + 10,
 				levels: ['warn', 'error'],
@@ -550,7 +557,7 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 			]);
 			const after = await archive.page({
 				region: 'af-south-1',
-				logGroup: '/aws/lambda/api',
+				logGroups: ['/aws/lambda/api'],
 				startTime: TS + 3,
 				endTime: TS + 3,
 				limit: 10,
@@ -564,6 +571,66 @@ describe.skipIf(!driverInstalled)('LogArchive against a real database file', () 
 			rmSync(dir, { recursive: true, force: true });
 		}
 		expect(existsSync(path)).toBe(false);
+	});
+
+	test('buckets counts per group and level for the chart', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'watch-tail-series-'));
+		const archive = await LogArchive.open({ path: join(dir, 'archive.duckdb') });
+		const base = Date.UTC(2024, 4, 17, 12, 0, 0);
+		try {
+			await archive.record('af-south-1', '/a', [
+				event({ id: 'a1', timestamp: base + 1_000, message: '{"level":"error","msg":"boom"}' }),
+				event({ id: 'a2', timestamp: base + 2_000, message: '{"level":"info","msg":"ok"}' }),
+				event({ id: 'a3', timestamp: base + 12_000, message: 'WARN slow' }),
+				event({ id: 'a4', timestamp: base + 12_500, message: '\tat Handler.java:41' }),
+			]);
+			await archive.record('af-south-1', '/b', [
+				event({ id: 'b1', timestamp: base + 15_000, message: '{"level":"error","msg":"other"}' }),
+			]);
+
+			const rows = await archive.seriesQuery({
+				region: 'af-south-1',
+				logGroups: ['/a', '/b'],
+				startTime: base,
+				endTime: base + 30_000,
+				bucketMs: 10_000,
+			});
+			// Two buckets for /a (0-10s and 10-20s) and one for /b, with the NULL
+			// level reported as `unknown` instead of being dropped.
+			expect(rows.map((row) => [row.t - base, row.group, row.level, row.events])).toEqual([
+				[0, '/a', 'error', 1],
+				[0, '/a', 'info', 1],
+				[10_000, '/a', 'unknown', 1],
+				[10_000, '/a', 'warn', 1],
+				[10_000, '/b', 'error', 1],
+			]);
+
+			const filtered = await archive.seriesQuery({
+				region: 'af-south-1',
+				logGroups: ['/a', '/b'],
+				startTime: base,
+				endTime: base + 30_000,
+				bucketMs: 10_000,
+				levels: ['error'],
+			});
+			expect(filtered.map((row) => [row.group, row.level, row.events])).toEqual([
+				['/a', 'error', 1],
+				['/b', 'error', 1],
+			]);
+
+			const singleGroup = await archive.seriesQuery({
+				region: 'af-south-1',
+				logGroups: ['/b'],
+				startTime: base,
+				endTime: base + 30_000,
+				bucketMs: 10_000,
+			});
+			expect(singleGroup.map((row) => row.group)).toEqual(['/b']);
+		} finally {
+			await archive.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+		expect(existsSync(join(dir, 'archive.duckdb'))).toBe(false);
 	});
 });
 

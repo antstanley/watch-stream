@@ -69,6 +69,11 @@ or handing a teammate a link that shows exactly the window you are staring at.
 - **History that outlives the window** - everything you stream is archived to a local
   [DuckDB](https://duckdb.org) file, so you can come back to it later - after the 14-day CloudWatch
   limit, with no AWS credentials at all - and query it with plain SQL.
+- **See the shape of an incident before you read it.** A scatter chart above the log view plots events
+  over time, coloured by level, so a spike is visible in one glance. Drag across it to zoom into that
+  moment - the log view follows the brush, and a click clears it.
+- **Follow more than one group at once.** Tick extra groups in the sidebar and the chart and the log
+  view cover all of them, with a group column and a merged stream; the selection lives in the URL.
 - **Severity you can filter on.** Every archived line is tagged `error`, `warn`, `info` or `debug`,
   and the viewer has chips to narrow to one level. A level the log itself declares
   (`{"level":"error"}`) is trusted; otherwise it is read from the line, and a line that carries no
@@ -293,6 +298,30 @@ Three things worth knowing:
 - **The archive is as wide as what you watched.** Events are recorded as they stream, so history covers
   the windows you have actually visited. It is also local, unencrypted and outside your AWS account -
   treat the file like the logs themselves.
+
+## The chart
+
+In **Historic** mode (and for the local archive) a scatter chart sits above the log view: X is time, Y
+is the number of events in a bucket, and each level is its own colour. Drag across it to brush a
+range - the log view, the window chip and the URL all follow, so a brush is a shareable view of the
+spike you just found. Click the chart to clear the brush, or press **Reset zoom** to go back to the
+preset window. The level chips filter the chart and the log view together.
+
+A drag only counts as a zoom when it is a real drag: a click, or a pointer that slips a couple of
+pixels, clears the brush instead of zooming into a sliver of a window, and the view is re-scoped when
+you release rather than while you drag - so the stream is not restarted mid-gesture.
+
+With several groups selected, the counts cover all of them and the chart's legend splits the totals by
+level. The archive answers the chart with one SQL query over the whole window; a CloudWatch view has no
+aggregate API, so there the chart counts the events already in the view.
+
+The panel has a header you can click to collapse it, and it remembers that choice: collapsed, it is
+just one line of totals and per-level counts, and the space goes back to the log view.
+
+The chart is drawn with [layerchart](https://www.layerchart.com), which is **loaded on demand**: the
+charting code is fetched in the browser only once the panel is open, so it never delays the log view's
+first paint. Measured on the production build, an open panel pulls about 235 KiB of chart code after
+the page has started, and a collapsed one pulls none at all.
 
 ## Development
 
