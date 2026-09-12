@@ -1,5 +1,56 @@
 # watch-tail
 
+## 0.5.0
+
+### Minor Changes
+
+- [`820a176`](https://github.com/antstanley/watch-stream/commit/820a176f3b47c7c6dafdf726729ac4d526e32458) Thanks [@antstanley](https://github.com/antstanley)! - Keep a local DuckDB archive of everything you stream, and browse it without AWS
+
+  Every event that arrives while a stream is open is now appended to a local DuckDB file
+  (`~/Library/Application Support/watch-tail/archive.duckdb` on macOS, the equivalent data directory
+  elsewhere). A new **Local archive** source in the UI lists the groups that file holds and replays any
+  window from it - instantly, and with no credentials, so history still works with an expired SSO
+  session or no AWS access at all. `--db <path>` moves the archive and `--no-archive` switches it off.
+
+  - `GET /api/stream` and `GET /api/log-groups` take a `source` parameter: `cloudwatch` (default) or
+    `archive`.
+  - `GET /api/archive` reports the file, its size and its contents; it never fails, and reports why the
+    archive is unavailable instead.
+  - Archived events are de-duplicated by CloudWatch event id, or by a hash of timestamp, stream and
+    message when an emulator omits ids, so re-scanning a window does not duplicate rows.
+  - Every archived line stores its level (`error`, `warn`, `info`, `debug` or no level at all), taken
+    from the level the payload declares when there is one and from the line otherwise. The viewer gains
+    level chips to narrow to one severity, and the archive stream accepts a `level` filter.
+  - The DuckDB driver is an optional dependency: without it the app behaves exactly as before and says
+    so on startup.
+
+- [#14](https://github.com/antstanley/watch-stream/pull/14) [`9529416`](https://github.com/antstanley/watch-stream/commit/95294160d1746d82d449e0d83ce53487d0779258) Thanks [@antstanley](https://github.com/antstanley)! - See the shape of an incident: a level-coloured scatter chart, brushing, and several groups at once
+
+  A scatter chart now sits above the log view. X is time, Y is the number of events in a bucket, and
+  every level gets its own colour, so a spike reads as errors or as noise before you scroll a single
+  line. Drag across the chart to brush a range: the log view, the window chip and the URL all follow, so
+  `?from=&to=` is a shareable view of that moment. A click clears the brush and **Reset zoom** returns to
+  the preset window. The level chips filter the chart and the log view together, and the chart's legend
+  splits the totals by level.
+
+  The sidebar now takes more than one log group. Ticking extra groups streams them together, adds a
+  group column to the view, covers all of them in the chart, and keeps the selection in the URL as
+  `groups=a,b` (a single group still uses `group=a`, so older links keep working). The archive reads
+  several groups in one SQL statement; CloudWatch runs one tail per group and merges them, so a quiet
+  group never holds back a busy one.
+
+  The brush zooms when the drag is released, not while the pointer is down, and a click or a slipped
+  pointer clears the brush instead of zooming to a sliver of the window.
+
+  The chart panel collapses to a single header line (totals and per-level counts) and remembers that
+  choice, and the charting library is loaded on demand: the chart code is fetched in the browser only
+  once the panel is open, so it never delays the log view's first paint (about 235 KiB of chart code
+  after the page starts, and none at all while collapsed).
+
+  `GET /api/series` is the chart's data: bucketed counts per group and level, with an automatic bucket
+  width, an optional `bucket`, a `level` filter, and no 14-day clamp - the archive keeps what CloudWatch
+  has forgotten. The chart is drawn with [layerchart](https://www.layerchart.com).
+
 ## 0.4.0
 
 ### Minor Changes
