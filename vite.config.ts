@@ -42,6 +42,8 @@ export default defineConfig({
 					name: 'client',
 					environment: 'jsdom',
 					include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+					// layerchart needs browser APIs jsdom lacks; see the file for what and why.
+					setupFiles: ['src/lib/test-setup-client.ts'],
 				},
 			},
 		],

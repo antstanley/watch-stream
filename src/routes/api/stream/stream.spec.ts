@@ -219,6 +219,7 @@ describe('GET /api/stream', () => {
 		expect(reader.frames[0].data).toEqual({
 			region: 'us-west-2',
 			logGroupName: '/aws/lambda/demo',
+			groups: ['/aws/lambda/demo'],
 			endpoint: null,
 			source: 'cloudwatch',
 			startTime: expect.any(Number),
@@ -235,6 +236,9 @@ describe('GET /api/stream', () => {
 					message: 'hello',
 					streamName: 'stream-e1',
 					ingestionTime: 1001,
+					// Every CloudWatch event is tagged with its group, so a merged
+					// multi-group stream can label lines and archive them correctly.
+					group: '/aws/lambda/demo',
 					// A live event carries no level of its own: the server detected none.
 					level: null,
 				},
@@ -314,6 +318,7 @@ describe('GET /api/stream', () => {
 			data: {
 				region: 'us-east-1',
 				logGroupName: 'demo',
+				groups: ['demo'],
 				endpoint: 'http://localhost:4566',
 				source: 'cloudwatch',
 				startTime: expect.any(Number),
@@ -331,6 +336,7 @@ describe('GET /api/stream', () => {
 		expect(frames[0].data).toEqual({
 			region: 'eu-west-1',
 			logGroupName: 'demo',
+			groups: ['demo'],
 			endpoint: null,
 			source: 'cloudwatch',
 			startTime,
@@ -606,6 +612,7 @@ describe('GET /api/stream source=archive', () => {
 			source: 'archive',
 			region: 'af-south-1',
 			logGroupName: '/aws/lambda/demo',
+			groups: ['/aws/lambda/demo'],
 			endpoint: null,
 			mode: 'historic',
 		});
@@ -636,11 +643,11 @@ describe('GET /api/stream source=archive', () => {
 
 		const request = archiveState.requests[0] as {
 			region: string;
-			logGroup: string;
+			logGroups: string[];
 			search: string | null;
 		};
 		expect(request.region).toBe('af-south-1');
-		expect(request.logGroup).toBe('/aws/lambda/demo');
+		expect(request.logGroups).toEqual(['/aws/lambda/demo']);
 		expect(request.search).toBe('boom');
 		expect(reader.frames[0]?.data).toMatchObject({ preset: '1h' });
 	});
@@ -800,6 +807,101 @@ describe('GET /api/stream source=archive', () => {
 		const reader = startReading(response);
 		await withTimeout(reader.done, 2000, 'archive stream end');
 		expect(archiveState.requests[0]).toMatchObject({ levels: null });
+	});
+
+	test('reads several archived groups in one pass', async () => {
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{
+					groups: '/aws/lambda/one,/aws/lambda/two',
+					region: 'af-south-1',
+					source: 'archive',
+				},
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+		expect(archiveState.requests).toHaveLength(1);
+		expect(archiveState.requests[0]).toMatchObject({
+			logGroups: ['/aws/lambda/one', '/aws/lambda/two'],
+		});
+		expect(reader.frames[0]?.data).toMatchObject({
+			groups: ['/aws/lambda/one', '/aws/lambda/two'],
+			logGroupName: '/aws/lambda/one',
+		});
+	});
+
+	test('refuses a selection that is too large, and reports the limit', async () => {
+		const tooMany = Array.from({ length: 11 }, (_, index) => `/g${index}`).join(',');
+		const response = await GET(
+			requestEvent({ groups: tooMany, source: 'archive', region: 'af-south-1' }),
+		);
+		expect(response.status).toBe(400);
+		const body = (await response.json()) as { code: string; error: string };
+		expect(body.code).toBe('too-many-groups');
+		expect(body.error).toContain('10');
+		expect(archiveState.requests).toEqual([]);
+	});
+
+	test('runs one CloudWatch tail per group and merges them', async () => {
+		// Two groups, one event each: the merged stream must carry both, labelled
+		// with their own group, and end once.
+		const perGroup: Record<string, unknown[]> = {
+			'/aws/lambda/one': [{ events: [event('n1', 1000, 'first group')] }],
+			'/aws/lambda/two': [{ events: [event('n2', 1001, 'second group')] }],
+		};
+		const seen: string[] = [];
+		mocks.send.mockImplementation(async (command: unknown) => {
+			const input = (command as { input: { logGroupName: string } }).input;
+			seen.push(input.logGroupName);
+			const queue = perGroup[input.logGroupName] ?? [];
+			return queue.shift() ?? { events: [] };
+		});
+
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{
+					groups: '/aws/lambda/one,/aws/lambda/two',
+					region: 'af-south-1',
+					mode: 'historic',
+					range: '15m',
+				},
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(
+			waitFor(() => reader.frames.filter((frame) => frame.event === 'log').length >= 2),
+			4000,
+			'merged log frames',
+		);
+		controller.abort();
+		await withTimeout(reader.done, 2000, 'stream end');
+
+		const events = reader.frames
+			.filter((frame) => frame.event === 'log')
+			.flatMap((frame) => (frame.data as { events: { message: string; group?: string }[] }).events);
+		expect(events.map((entry) => entry.message).toSorted()).toEqual([
+			'first group',
+			'second group',
+		]);
+		expect(events.map((entry) => entry.group).toSorted()).toEqual([
+			'/aws/lambda/one',
+			'/aws/lambda/two',
+		]);
+		// Both groups were polled (each repeatedly, until its window ends), and the
+		// ready frame names both.
+		expect([...new Set(seen)].toSorted()).toEqual(['/aws/lambda/one', '/aws/lambda/two']);
+		expect(reader.frames[0]?.data).toMatchObject({
+			groups: ['/aws/lambda/one', '/aws/lambda/two'],
+			logGroupName: '/aws/lambda/one',
+		});
+		// Every event is archived under its own group.
+		const recorded = archiveState.records.map((record) => record.group).toSorted();
+		expect(recorded).toEqual(['/aws/lambda/one', '/aws/lambda/two']);
 	});
 
 	test('archives every batch of a CloudWatch stream', async () => {

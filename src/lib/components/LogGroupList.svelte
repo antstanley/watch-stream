@@ -10,15 +10,17 @@
 		source?: StreamSource;
 		/** Active region, used for context in the empty state. */
 		region?: string;
-		/** Group name currently being tailed. */
-		selected?: string | null;
+		/** Names of the groups currently being tailed; empty when none are selected. */
+		selected?: string[];
 		loading?: boolean;
 		/** API error message, shown instead of the list. */
 		error?: string | null;
 		/** Row cap; defaults to {@link MAX_GROUP_ROWS}. */
 		maxRows?: number;
-		/** Called with the group name when a row is clicked. */
+		/** Called with the group name when a row is clicked, replacing the selection. */
 		onSelect?: (name: string) => void;
+		/** Called with the group name when its checkbox is toggled in or out of the selection. */
+		onToggle?: (name: string) => void;
 		/** Called when the refresh button is clicked. */
 		onRefresh?: () => void;
 	};
@@ -27,11 +29,12 @@
 		groups = [],
 		source = 'cloudwatch',
 		region = '',
-		selected = null,
+		selected = [],
 		loading = false,
 		error = null,
 		maxRows = MAX_GROUP_ROWS,
 		onSelect,
+		onToggle,
 		onRefresh,
 	}: Props = $props();
 
@@ -62,9 +65,25 @@
 	let truncated = $derived(filtered.length > visible.length);
 	let query = $derived(search.trim());
 
-	/** Row styling, highlighting the group that is currently being tailed. */
+	/**
+	 * Selection as a flat list of names. `selected` is typed as a list, but callers that have not
+	 * migrated yet may still pass a single name (or `null`), so those are normalised here.
+	 */
+	function selectionList(value: string[] | string | null | undefined): string[] {
+		if (value === null || value === undefined) return [];
+		return Array.isArray(value) ? value : [value];
+	}
+
+	let activeSelection = $derived(selectionList(selected));
+
+	/** True when `name` is part of the current (possibly multi-group) selection. */
+	function isSelected(name: string): boolean {
+		return activeSelection.includes(name);
+	}
+
+	/** Row styling, highlighting every group that is currently being tailed. */
 	function rowTone(name: string): string {
-		return name === selected
+		return isSelected(name)
 			? 'border-sky-800 bg-sky-950/50 text-sky-200'
 			: 'border-transparent bg-neutral-900/60 text-neutral-300 hover:border-neutral-800 hover:text-neutral-100';
 	}
@@ -79,6 +98,11 @@
 			<span class="text-xs text-neutral-500" data-testid="group-count">
 				{formatCount(filtered.length)} of {formatCount(groups.length)}
 			</span>
+			{#if activeSelection.length > 1}
+				<span class="text-xs font-medium text-sky-400" data-testid="selected-count">
+					{formatCount(activeSelection.length)} selected
+				</span>
+			{/if}
 			{#if archived}
 				<span
 					class="rounded-full border border-teal-900 bg-teal-950/50 px-1.5 py-0.5 text-[0.625rem] font-medium text-teal-300"
@@ -139,13 +163,21 @@
 	{:else}
 		<ul class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-1">
 			{#each visible as group (group.arn ?? group.name)}
-				<li>
+				<li class="flex items-center gap-1.5">
+					<input
+						type="checkbox"
+						data-testid="group-check-{group.name}"
+						aria-label={`Include ${group.name} in the selection`}
+						checked={isSelected(group.name)}
+						onchange={() => onToggle?.(group.name)}
+						class="size-3.5 shrink-0 cursor-pointer accent-sky-500"
+					/>
 					<button
 						type="button"
 						data-testid="group-row"
-						aria-current={group.name === selected ? 'true' : undefined}
+						aria-current={isSelected(group.name) ? 'true' : undefined}
 						onclick={() => onSelect?.(group.name)}
-						class="flex w-full items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors {rowTone(
+						class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors {rowTone(
 							group.name,
 						)}"
 					>

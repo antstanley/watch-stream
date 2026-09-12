@@ -53,7 +53,13 @@ export type TimerHandle = ReturnType<typeof setTimeout>;
 /** What to tail. */
 export type StreamTarget = {
 	region: string;
+	/** One log group; use {@link StreamTarget.groups} for several. */
 	group: string;
+	/**
+	 * Every selected log group. When it holds more than one, the URL sends
+	 * `groups=a,b` instead of `group=a`.
+	 */
+	groups?: string[];
 	/** Defaults to `cloudwatch`; `archive` reads the local DuckDB file instead. */
 	source?: StreamSource;
 	/** `live` (default) tails new events; `historic` scans a fixed window. */
@@ -100,7 +106,9 @@ function createBrowserEventSource(url: string): EventSourceLike {
 export function buildStreamUrl(target: StreamTarget, base = ''): string {
 	const search = new URLSearchParams();
 	search.set('region', target.region);
-	search.set('group', target.group);
+	const groups = (target.groups ?? []).filter((name) => name.length > 0);
+	if (groups.length > 1) search.set('groups', groups.join(','));
+	else search.set('group', groups[0] ?? target.group);
 	// CloudWatch is the server default, so its URL stays exactly as it always was.
 	if (target.source === 'archive') search.set('source', 'archive');
 	if (target.filterPattern) search.set('filterPattern', target.filterPattern);

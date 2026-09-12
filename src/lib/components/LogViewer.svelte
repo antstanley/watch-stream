@@ -56,6 +56,16 @@
 		endReason?: string | null;
 		/** Database file behind the local archive, shown in the archive tooltip. */
 		archivePath?: string | null;
+		/** Log groups in the view; more than one adds a group column. */
+		groups?: string[];
+		/**
+		 * Active level filter. Leave it undefined to let the viewer own the filter;
+		 * pass a value (including `null`) to control it from outside, which is how
+		 * the chart above stays in step with the chips.
+		 */
+		level?: LogLevel | null;
+		/** Called when the level filter changes while it is controlled. */
+		onLevelChange?: (level: LogLevel | null) => void;
 		onFilterChange?: (value: string) => void;
 		onPauseToggle?: () => void;
 		onClear?: () => void;
@@ -78,6 +88,9 @@
 		ready = null,
 		endReason = null,
 		archivePath = null,
+		groups = [],
+		level = undefined,
+		onLevelChange,
 		onFilterChange,
 		onPauseToggle,
 		onClear,
@@ -140,13 +153,23 @@
 		 * the row is expanded. `null` when the line carries no JSON.
 		 */
 		expandable: string | null;
+		/** Log group the line came from, when the payload carries one. */
+		group: string | null;
 		/** Detected level, or `null` when the line carried no signal. */
 		level: LogLevel | null;
 		levelClass: string;
 	};
 
-	/** Level the user narrowed to; `null` shows every level. */
-	let levelFilter = $state<LogLevel | null>(null);
+	/** Level the viewer owns when the parent does not control it. */
+	let ownLevelFilter = $state<LogLevel | null>(null);
+	/** Active level filter: the parent's when given, otherwise the viewer's. */
+	let levelFilter = $derived(level === undefined ? ownLevelFilter : level);
+
+	/** Sets the level filter, through the parent when it is controlled. */
+	function setLevelFilter(next: LogLevel | null): void {
+		if (level === undefined) ownLevelFilter = next;
+		else onLevelChange?.(next);
+	}
 
 	/** The four levels offered as filter chips, in severity order. */
 	const LEVEL_CHIPS: { level: LogLevel; label: string; activeClass: string }[] = [
@@ -178,8 +201,8 @@
 	let levelCounts = $derived.by(() => {
 		const counts = { error: 0, warn: 0, info: 0, debug: 0, unknown: 0 } as Record<string, number>;
 		for (const event of lines) {
-			const level = effectiveLevel(event);
-			counts[level ?? 'unknown'] = (counts[level ?? 'unknown'] ?? 0) + 1;
+			const rowLevel = effectiveLevel(event);
+			counts[rowLevel ?? 'unknown'] = (counts[rowLevel ?? 'unknown'] ?? 0) + 1;
 		}
 		return counts;
 	});
@@ -189,9 +212,9 @@
 			// The server's detection is authoritative when it is present: it is the
 			// same value the archive stored. Events without it (older payloads, tests)
 			// fall back to the local guess.
-			const level = event.level !== undefined ? event.level : detectLevel(event.message);
+			const rowLevel = event.level !== undefined ? event.level : detectLevel(event.message);
 			const formatted = formatLogMessage(event.message, { prettyJson: jsonView });
-			const levelClass = levelColorClass(level);
+			const levelClass = levelColorClass(rowLevel);
 			// With pretty-printing off, a line that carries JSON can still be
 			// opened on demand; the payload is found in the raw text.
 			let expandable: string | null = null;
@@ -204,10 +227,11 @@
 				time: formatTime(event.timestamp),
 				timestamp: formatTimestamp(event.timestamp),
 				streamName: event.streamName,
+				group: event.group ?? null,
 				message: formatted.text,
 				tokens: jsonView && formatted.isJson ? tokenizeJson(formatted.text) : null,
 				expandable,
-				level,
+				level: rowLevel,
 				levelClass,
 			};
 		}),
@@ -382,7 +406,7 @@
 			<div class="flex items-center gap-1" role="group" aria-label="Filter by level">
 				<button
 					type="button"
-					onclick={() => (levelFilter = null)}
+					onclick={() => setLevelFilter(null)}
 					aria-pressed={levelFilter === null}
 					title="Show every level, including lines with no level"
 					data-testid="level-all"
@@ -395,7 +419,7 @@
 				{#each LEVEL_CHIPS as chip (chip.level)}
 					<button
 						type="button"
-						onclick={() => (levelFilter = levelFilter === chip.level ? null : chip.level)}
+						onclick={() => setLevelFilter(levelFilter === chip.level ? null : chip.level)}
 						aria-pressed={levelFilter === chip.level}
 						title="Show only {chip.label} lines ({levelCounts[chip.level] ?? 0} loaded)"
 						data-testid="level-{chip.level}"
@@ -526,6 +550,16 @@
 							<span class="w-[7.5rem] shrink-0 text-neutral-500" title={row.timestamp}>
 								{row.time}
 							</span>
+							{#if groups.length > 1}
+								<!-- Only worth a column when the view holds more than one group. -->
+								<span
+									class="w-[9rem] shrink-0 truncate text-teal-400/80"
+									title={row.group ?? ''}
+									data-testid="log-group"
+								>
+									{row.group ?? ''}
+								</span>
+							{/if}
 							<span
 								class="shrink-0 truncate text-sky-400/80"
 								style={prefixStyle}

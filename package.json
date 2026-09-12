@@ -77,7 +77,8 @@
 		"@aws-sdk/client-sts": "^3.1130.0",
 		"@bomb.sh/args": "^0.3.1",
 		"@bomb.sh/tab": "^0.0.22",
-		"@clack/prompts": "^1.8.0"
+		"@clack/prompts": "^1.8.0",
+		"layerchart": "^2.5.0"
 	},
 	"devDependencies": {
 		"@changesets/changelog-github": "^1.0.1",

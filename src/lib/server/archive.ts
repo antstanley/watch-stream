@@ -27,10 +27,14 @@ import {
 	rowToTotals,
 	rowsToGroups,
 	rowsToPage,
+	rowsToSeries,
+	buildSeriesQuery,
 	toArchiveParams,
 	type ArchiveCursor,
 	type ArchiveGroupRow,
 	type ArchivePageRequest,
+	type ArchiveSeriesRequest,
+	type ArchiveSeriesRow,
 	type ArchiveParam,
 	type ArchiveTotals,
 } from './archive-sql';
@@ -329,6 +333,17 @@ export class LogArchive {
 			const { sql, params } = buildPageQuery(request);
 			const result = await connection.runAndReadAll(sql, params);
 			return rowsToPage(result.getRowObjects());
+		});
+	}
+
+	/** Bucketed event counts for the chart, per group and level. */
+	async seriesQuery(request: ArchiveSeriesRequest): Promise<ArchiveSeriesRow[]> {
+		return this.#guard([], async () => {
+			const connection = this.#connection;
+			if (connection === null) return [];
+			const { sql, params } = buildSeriesQuery(request);
+			const result = await connection.runAndReadAll(sql, params);
+			return rowsToSeries(result.getRowObjects());
 		});
 	}
 

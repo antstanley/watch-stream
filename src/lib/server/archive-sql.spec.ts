@@ -8,10 +8,12 @@ import {
 	buildGroupsQuery,
 	buildInsertSql,
 	buildPageQuery,
+	buildSeriesQuery,
 	escapeLike,
 	rowToTotals,
 	rowsToGroups,
 	rowsToPage,
+	rowsToSeries,
 	toArchiveParams,
 } from './archive-sql';
 import type { LogEventDto } from '$lib/types';
@@ -141,12 +143,12 @@ describe('buildPageQuery', () => {
 	test('filters on region, group and window and ends with the limit', () => {
 		const { sql, params } = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS + 1000,
 			limit: 200,
 		});
-		expect(sql).toContain('WHERE region = ? AND log_group = ?');
+		expect(sql).toContain('WHERE region = ? AND log_group IN (?)');
 		expect(sql).toContain('ORDER BY timestamp_ms, seq LIMIT ?');
 		expect(sql).not.toContain('ILIKE');
 		expect(params).toEqual([REGION, GROUP, BigInt(TS), BigInt(TS + 1000), BigInt(200)]);
@@ -155,7 +157,7 @@ describe('buildPageQuery', () => {
 	test('adds the search term as an escaped substring match', () => {
 		const { sql, params } = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS,
 			search: '50% off',
@@ -168,7 +170,7 @@ describe('buildPageQuery', () => {
 	test('ignores a blank search term', () => {
 		const { sql } = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS,
 			search: '   ',
@@ -180,7 +182,7 @@ describe('buildPageQuery', () => {
 	test('adds a stream prefix filter', () => {
 		const { sql, params } = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS,
 			streamPrefix: 'worker',
@@ -193,7 +195,7 @@ describe('buildPageQuery', () => {
 	test('pages after a cursor with a tuple comparison', () => {
 		const { sql, params } = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS + 10,
 			after: { timestamp: TS + 3, seq: 42 },
@@ -206,7 +208,7 @@ describe('buildPageQuery', () => {
 	test('clamps a silly limit to a usable positive value', () => {
 		const { params } = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS,
 			limit: 0,
@@ -246,7 +248,7 @@ describe('rowsToPage', () => {
 	test('filters by one or several levels', () => {
 		const single = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS,
 			levels: ['error'],
@@ -257,7 +259,7 @@ describe('rowsToPage', () => {
 
 		const many = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS,
 			levels: ['error', 'warn'],
@@ -270,7 +272,7 @@ describe('rowsToPage', () => {
 	test('adds no level clause without a filter', () => {
 		const { sql } = buildPageQuery({
 			region: REGION,
-			logGroup: GROUP,
+			logGroups: [GROUP],
 			startTime: TS,
 			endTime: TS,
 			limit: 10,
@@ -353,6 +355,54 @@ describe('totals and groups', () => {
 		expect(groups).toEqual([
 			{ region: REGION, logGroup: GROUP, events: 3, oldest: TS, newest: TS + 2 },
 			{ region: REGION, logGroup: GROUP, events: 2, oldest: null, newest: null },
+		]);
+	});
+
+	test('binds the bucket width before the window, matching the statement order', () => {
+		const { sql, params } = buildSeriesQuery({
+			region: REGION,
+			logGroups: [GROUP, '/other'],
+			startTime: TS,
+			endTime: TS + 60_000,
+			bucketMs: 10_000,
+		});
+		expect(sql).toContain('CAST(floor(timestamp_ms / ?) * ? AS BIGINT) AS bucket');
+		expect(sql).toContain('log_group IN (?, ?)');
+		expect(sql).toContain("coalesce(level, 'unknown') AS level");
+		expect(params).toEqual([
+			BigInt(10_000),
+			BigInt(10_000),
+			REGION,
+			GROUP,
+			'/other',
+			BigInt(TS),
+			BigInt(TS + 60_000),
+		]);
+	});
+
+	test('adds the level filter after the window', () => {
+		const { sql, params } = buildSeriesQuery({
+			region: REGION,
+			logGroups: [GROUP],
+			startTime: TS,
+			endTime: TS + 60_000,
+			bucketMs: 1_000,
+			levels: ['error', 'warn'],
+		});
+		expect(sql).toContain('level IN (?, ?)');
+		expect(params.slice(-2)).toEqual(['error', 'warn']);
+	});
+
+	test('maps series rows and normalises a missing level', () => {
+		const rows = rowsToSeries([
+			{ bucket: BigInt(TS), log_group: GROUP, level: 'error', events: BigInt(4) },
+			{ bucket: TS + 10_000, log_group: GROUP, level: null, events: 2 },
+			{ bucket: null, log_group: GROUP, level: 'error', events: 1 },
+			{ bucket: TS, log_group: null, level: 'error', events: 1 },
+		]);
+		expect(rows).toEqual([
+			{ t: TS, group: GROUP, level: 'error', events: 4 },
+			{ t: TS + 10_000, group: GROUP, level: 'unknown', events: 2 },
 		]);
 	});
 });

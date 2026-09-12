@@ -54,7 +54,7 @@ function tailOptions(archive: ArchivePageSource, overrides: Record<string, unkno
 	return {
 		archive,
 		region: 'af-south-1',
-		logGroup: '/aws/lambda/api',
+		logGroups: ['/aws/lambda/api'],
 		startTime: TS,
 		endTime: TS + 1000,
 		...overrides,
@@ -166,7 +166,7 @@ describe('tailArchivedEvents', () => {
 		);
 		expect(requests[0]).toMatchObject({
 			region: 'af-south-1',
-			logGroup: '/aws/lambda/api',
+			logGroups: ['/aws/lambda/api'],
 			startTime: TS,
 			endTime: TS + 5,
 			search: 'boom',
