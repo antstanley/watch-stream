@@ -29,6 +29,8 @@
 		disabled?: boolean;
 		/** True while a historic window is being fetched. */
 		loading?: boolean;
+		/** True when the source cannot follow live events, such as the local archive. */
+		liveDisabled?: boolean;
 		/** Called when the user switches mode or applies a range. */
 		onApply?: (payload: ApplyPayload) => void;
 	};
@@ -40,6 +42,7 @@
 		to = null,
 		disabled = false,
 		loading = false,
+		liveDisabled = false,
 		onApply,
 	}: Props = $props();
 
@@ -63,6 +66,9 @@
 	/** Starts or stops tailing live. */
 	function selectMode(next: LogMode): void {
 		if (next === mode) return;
+		// A source without live events (the archive) must not open a live window,
+		// even if the click arrives from a script rather than a real button.
+		if (next === 'live' && liveDisabled) return;
 		onApply?.({
 			mode: next,
 			range: next === 'live' ? '' : range === '' ? '15m' : range,
@@ -124,10 +130,14 @@
 			type="button"
 			onclick={() => selectMode('live')}
 			aria-pressed={mode === 'live'}
+			disabled={liveDisabled}
+			title={liveDisabled
+				? 'There is nothing to tail: the local archive holds historic windows'
+				: undefined}
 			data-testid="mode-live"
 			class="{chip} {mode === 'live'
 				? 'border-sky-700 bg-sky-950/60 text-sky-300'
-				: 'border-transparent text-neutral-400 hover:text-neutral-200'}"
+				: 'border-transparent text-neutral-400 hover:text-neutral-200'} disabled:opacity-40"
 		>
 			Live
 		</button>

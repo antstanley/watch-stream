@@ -3,6 +3,7 @@ import {
 	type CloudWatchLogsClient,
 	type LogGroup,
 } from '@aws-sdk/client-cloudwatch-logs';
+import type { ArchiveGroupRow } from '$lib/server/archive-sql';
 import type { LogGroupSummary } from '$lib/types';
 
 /** Page size requested from `DescribeLogGroups` (the API maximum). */
@@ -76,4 +77,33 @@ export async function listLogGroups(
 	} while (nextToken !== undefined && nextToken.length > 0 && collected.length < limit);
 
 	return collected.toSorted(byName);
+}
+
+/** Maps archived group rows onto the summary the group list renders. */
+function archivedGroupSummaries(rows: readonly ArchiveGroupRow[]): LogGroupSummary[] {
+	return rows.map((row) => {
+		const summary: LogGroupSummary = { name: row.logGroup, archivedEvents: row.events };
+		if (row.oldest !== null) summary.archivedOldest = row.oldest;
+		if (row.newest !== null) summary.archivedNewest = row.newest;
+		return summary;
+	});
+}
+
+/**
+ * Lists the log groups the local archive holds.
+ *
+ * The archive needs no credentials, so this works when CloudWatch is
+ * unreachable. Groups are filtered by prefix and clamped to `limit` in process,
+ * because the query already returns at most one row per group.
+ */
+export function listArchivedGroups(
+	rows: readonly ArchiveGroupRow[],
+	options: { prefix?: string; limit?: number } = {},
+): LogGroupSummary[] {
+	const prefix = options.prefix?.trim() ?? '';
+	const limit = clampLimit(options.limit);
+	const summaries = archivedGroupSummaries(rows).filter(
+		(summary) => prefix.length === 0 || summary.name.startsWith(prefix),
+	);
+	return summaries.slice(0, limit).toSorted(byName);
 }

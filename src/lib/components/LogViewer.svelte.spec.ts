@@ -42,7 +42,9 @@ describe('LogViewer', () => {
 		expect(screen.getByText('stream-1')).toBeTruthy();
 		expect(screen.getByText('03:04:05.678')).toBeTruthy();
 		expect(rows[0].dataset.level).toBe('error');
-		expect(rows[1].dataset.level).toBe('info');
+		// 'harmless noise' carries no level word, so it is honestly unknown rather
+		// than being labelled info.
+		expect(rows[1].dataset.level).toBe('unknown');
 		expect(screen.getByText('ERROR keep this line').className).toContain('text-red-400');
 	});
 
@@ -247,6 +249,7 @@ describe('LogViewer window chip', () => {
 		region: 'us-east-1',
 		logGroupName: '/aws/app',
 		endpoint: null,
+		source: 'cloudwatch' as const,
 		startTime: Date.UTC(2024, 4, 10, 11, 0, 0),
 		endTime: Date.UTC(2024, 4, 10, 12, 0, 0),
 		mode: 'historic' as const,
@@ -287,6 +290,109 @@ describe('LogViewer window chip', () => {
 			props: { lines: LINES, group: '/aws/app', endReason: 'client-disconnected' },
 		});
 		expect(screen.queryByTestId('window-complete')).toBeNull();
+	});
+});
+
+describe('LogViewer archive mode', () => {
+	const archiveReady = {
+		region: 'us-east-1',
+		logGroupName: '/aws/app',
+		endpoint: null,
+		source: 'archive' as const,
+		startTime: Date.UTC(2024, 4, 10, 11, 0, 0),
+		endTime: Date.UTC(2024, 4, 10, 12, 0, 0),
+		mode: 'historic' as const,
+		preset: '1h',
+		clamped: false,
+	};
+	const ARCHIVE_PATH = '/Users/dev/Library/Application Support/watch-tail/archive.duckdb';
+
+	it('marks the events as locally archived and names the database file', () => {
+		render(LogViewer, {
+			props: {
+				lines: LINES,
+				group: '/aws/app',
+				mode: 'historic',
+				ready: archiveReady,
+				archivePath: ARCHIVE_PATH,
+			},
+		});
+
+		const badge = screen.getByTestId('archive-badge');
+		expect(badge.textContent?.trim()).toBe('local archive');
+		expect(badge.getAttribute('title')).toContain('Locally archived events');
+		expect(badge.getAttribute('title')).toContain(ARCHIVE_PATH);
+	});
+
+	it('renders no archive indicator for CloudWatch events', () => {
+		render(LogViewer, {
+			props: {
+				lines: LINES,
+				group: '/aws/app',
+				mode: 'historic',
+				ready: { ...archiveReady, source: 'cloudwatch' },
+			},
+		});
+
+		expect(screen.queryByTestId('archive-badge')).toBeNull();
+	});
+
+	it('never shows a live, connecting or reconnecting badge for the archive', () => {
+		for (const status of ['connecting', 'live', 'reconnecting'] as const) {
+			const { unmount } = render(LogViewer, {
+				props: { lines: LINES, group: '/aws/app', mode: 'historic', ready: archiveReady, status },
+			});
+
+			const badge = screen.getByTestId('status-badge');
+			expect(badge.dataset.status).toBe('idle');
+			expect(badge.textContent?.trim()).toBe('idle');
+			unmount();
+		}
+	});
+
+	it('ends on the neutral ended pill when the archived window completes', () => {
+		render(LogViewer, {
+			props: {
+				lines: LINES,
+				group: '/aws/app',
+				mode: 'historic',
+				ready: archiveReady,
+				status: 'ended',
+				endReason: 'window-complete',
+			},
+		});
+
+		const badge = screen.getByTestId('status-badge');
+		expect(badge.dataset.status).toBe('ended');
+		expect(badge.className).toContain('neutral');
+		expect(screen.getByTestId('window-complete')).toBeTruthy();
+	});
+
+	it('still reports a real archive failure', () => {
+		render(LogViewer, {
+			props: {
+				lines: [],
+				group: '/aws/app',
+				region: 'us-east-1',
+				mode: 'historic',
+				ready: archiveReady,
+				status: 'error',
+				error: { message: 'Cannot find module @duckdb/node-api', code: 'archive-unavailable' },
+			},
+		});
+
+		expect(screen.getByTestId('status-badge').dataset.status).toBe('error');
+		expect(screen.getByRole('alert').textContent).toContain('@duckdb/node-api');
+	});
+
+	it('says the archived window is empty instead of waiting for live events', () => {
+		render(LogViewer, {
+			props: { lines: [], group: '/aws/app', mode: 'historic', ready: archiveReady },
+		});
+
+		const empty = screen.getByTestId('viewer-empty').textContent ?? '';
+		expect(empty).toContain('No archived events for /aws/app');
+		expect(empty).not.toContain('Waiting for events');
 	});
 });
 
@@ -382,5 +488,75 @@ describe('LogViewer expandable JSON lines', () => {
 		expect(row.dataset.expandable).toBeUndefined();
 		// pretty-printed inline instead, so there is nothing to expand
 		expect(screen.getByTestId('log-message').textContent).toContain('{\n  "level": "info",');
+	});
+});
+
+describe('LogViewer level filter', () => {
+	const LINES_WITH_LEVELS = [
+		{
+			id: 'a',
+			timestamp: 1_700_000_000_000,
+			message: '{"level":"error","msg":"boom"}',
+			level: 'error' as const,
+		},
+		{
+			id: 'b',
+			timestamp: 1_700_000_001_000,
+			message: '{"level":"warn","msg":"slow"}',
+			level: 'warn' as const,
+		},
+		{
+			id: 'c',
+			timestamp: 1_700_000_002_000,
+			message: '{"level":"info","msg":"ok"}',
+			level: 'info' as const,
+		},
+		{ id: 'd', timestamp: 1_700_000_003_000, message: '\tat Handler.java:41', level: null },
+	];
+
+	it('shows every level until a chip is chosen', () => {
+		render(LogViewer, { props: { lines: LINES_WITH_LEVELS, group: '/aws/app' } });
+		expect(screen.getAllByTestId('log-line')).toHaveLength(4);
+		expect(screen.getByTestId('level-all').getAttribute('aria-pressed')).toBe('true');
+	});
+
+	it('narrows to one level when its chip is pressed', async () => {
+		render(LogViewer, { props: { lines: LINES_WITH_LEVELS, group: '/aws/app' } });
+		await fireEvent.click(screen.getByTestId('level-error'));
+
+		expect(screen.getAllByTestId('log-line')).toHaveLength(1);
+		expect(screen.getByText(/boom/)).toBeTruthy();
+		expect(screen.getByTestId('level-error').getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByTestId('visible-count').textContent).toContain('1 shown');
+	});
+
+	it('leaves unclassified lines out of a level filter, and back in with All', async () => {
+		render(LogViewer, { props: { lines: LINES_WITH_LEVELS, group: '/aws/app' } });
+		await fireEvent.click(screen.getByTestId('level-warn'));
+		expect(screen.queryByText(/Handler.java/)).toBeNull();
+
+		await fireEvent.click(screen.getByTestId('level-all'));
+		expect(screen.getAllByTestId('log-line')).toHaveLength(4);
+	});
+
+	it('counts loaded lines per level on the chips', () => {
+		render(LogViewer, { props: { lines: LINES_WITH_LEVELS, group: '/aws/app' } });
+		expect(screen.getByTestId('level-error').textContent).toContain('1');
+		expect(screen.getByTestId('level-info').textContent).toContain('1');
+		// No debug line is loaded, so the chip shows no count.
+		expect(screen.getByTestId('level-debug').textContent).not.toMatch(/\d/);
+	});
+
+	it('prefers the level the server detected over a fresh guess', () => {
+		// The text says ERROR, the server said debug: the stored level wins.
+		render(LogViewer, {
+			props: {
+				lines: [
+					{ id: 'x', timestamp: 1, message: 'ERROR looking, but debug', level: 'debug' as const },
+				],
+				group: '/aws/app',
+			},
+		});
+		expect(screen.getAllByTestId('log-line')[0]?.dataset.level).toBe('debug');
 	});
 });

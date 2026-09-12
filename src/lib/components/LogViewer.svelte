@@ -3,8 +3,15 @@
 	import ColumnResizer from './ColumnResizer.svelte';
 	import StatusBadge from './StatusBadge.svelte';
 	import { formatCount, formatTime, formatTimestamp } from '$lib/format';
-	import { describeStreamError } from '$lib/groups-client';
-	import { detectLevel, eventKey, filterEvents, levelColorClass } from '$lib/log-buffer';
+	import { describeArchive, describeStreamError } from '$lib/groups-client';
+	import {
+		detectLevel,
+		effectiveLevel,
+		eventKey,
+		filterByLevel,
+		filterEvents,
+		levelColorClass,
+	} from '$lib/log-buffer';
 	import type { LogLevel } from '$lib/log-buffer';
 	import { findJsonInMessage, formatLogMessage, tokenizeJson } from '$lib/log-format';
 	import type { JsonToken } from '$lib/log-format';
@@ -47,6 +54,8 @@
 		ready?: StreamReadyPayload | null;
 		/** Reason the server ended the stream, for example `window-complete`. */
 		endReason?: string | null;
+		/** Database file behind the local archive, shown in the archive tooltip. */
+		archivePath?: string | null;
 		onFilterChange?: (value: string) => void;
 		onPauseToggle?: () => void;
 		onClear?: () => void;
@@ -68,6 +77,7 @@
 		mode = 'live',
 		ready = null,
 		endReason = null,
+		archivePath = null,
 		onFilterChange,
 		onPauseToggle,
 		onClear,
@@ -130,16 +140,56 @@
 		 * the row is expanded. `null` when the line carries no JSON.
 		 */
 		expandable: string | null;
-		level: LogLevel;
+		/** Detected level, or `null` when the line carried no signal. */
+		level: LogLevel | null;
 		levelClass: string;
 	};
 
-	/** Lines matching the client-side filter. */
-	let visible = $derived(filterEvents(lines, filter));
+	/** Level the user narrowed to; `null` shows every level. */
+	let levelFilter = $state<LogLevel | null>(null);
+
+	/** The four levels offered as filter chips, in severity order. */
+	const LEVEL_CHIPS: { level: LogLevel; label: string; activeClass: string }[] = [
+		{ level: 'error', label: 'Error', activeClass: 'border-red-800 bg-red-950/50 text-red-300' },
+		{
+			level: 'warn',
+			label: 'Warn',
+			activeClass: 'border-amber-800 bg-amber-950/40 text-amber-300',
+		},
+		{
+			level: 'info',
+			label: 'Info',
+			activeClass: 'border-neutral-700 bg-neutral-800 text-neutral-100',
+		},
+		{
+			level: 'debug',
+			label: 'Debug',
+			activeClass: 'border-neutral-700 bg-neutral-800 text-neutral-400',
+		},
+	];
+	/** Shared chip styling. */
+	const levelChip =
+		'rounded-md border px-2 py-1 text-xs font-medium transition-colors hover:border-neutral-700';
+
+	/** Lines matching the text filter and the level filter. */
+	let visible = $derived(filterByLevel(filterEvents(lines, filter), levelFilter));
+
+	/** How many lines of each level are loaded, including `unknown`. */
+	let levelCounts = $derived.by(() => {
+		const counts = { error: 0, warn: 0, info: 0, debug: 0, unknown: 0 } as Record<string, number>;
+		for (const event of lines) {
+			const level = effectiveLevel(event);
+			counts[level ?? 'unknown'] = (counts[level ?? 'unknown'] ?? 0) + 1;
+		}
+		return counts;
+	});
 	/** Presentation rows for the visible lines. */
 	let rows: Row[] = $derived(
 		visible.map((event, index) => {
-			const level = detectLevel(event.message);
+			// The server's detection is authoritative when it is present: it is the
+			// same value the archive stored. Events without it (older payloads, tests)
+			// fall back to the local guess.
+			const level = event.level !== undefined ? event.level : detectLevel(event.message);
 			const formatted = formatLogMessage(event.message, { prettyJson: jsonView });
 			const levelClass = levelColorClass(level);
 			// With pretty-printing off, a line that carries JSON can still be
@@ -177,13 +227,28 @@
 	let errorText = $derived(
 		error === null ? null : describeStreamError(region, group, error.message),
 	);
+	/** True when the ready frame says the events come from the local archive. */
+	let archived = $derived(ready?.source === 'archive');
+	/**
+	 * Status the badge shows. The archive has no live tail: it replays a fixed window and ends by
+	 * itself, so its connecting/live/reconnecting states would all be misleading.
+	 */
+	let displayStatus = $derived(
+		archived && (status === 'connecting' || status === 'live' || status === 'reconnecting')
+			? 'idle'
+			: status,
+	);
+	/** Tooltip of the archive indicator, naming the database file it reads. */
+	let archiveTitle = $derived(describeArchive(archivePath));
 	/** Body text when there is nothing to render. */
 	let emptyText = $derived(
 		group === null || group === ''
 			? 'Select a log group to start tailing.'
-			: filter.trim() === ''
-				? `Waiting for events from ${group}\u2026`
-				: 'No lines match the filter.',
+			: filter.trim() !== ''
+				? 'No lines match the filter.'
+				: archived
+					? `No archived events for ${group} in this window.`
+					: `Waiting for events from ${group}\u2026`,
 	);
 	/** Auto-scroll button colour. */
 	let autoScrollTone = $derived(autoScroll ? 'text-sky-300' : 'text-neutral-400');
@@ -266,7 +331,16 @@
 	<div
 		class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-neutral-800 bg-neutral-900/40 px-3 py-2"
 	>
-		<StatusBadge {status} />
+		<StatusBadge status={displayStatus} />
+		{#if archived}
+			<span
+				data-testid="archive-badge"
+				title={archiveTitle}
+				class="rounded-full border border-teal-900 bg-teal-950/60 px-2 py-0.5 text-[0.6875rem] font-medium text-teal-300"
+			>
+				local archive
+			</span>
+		{/if}
 		<span class="text-xs text-neutral-400" data-testid="visible-count">
 			{formatCount(visible.length)} shown
 		</span>
@@ -305,6 +379,37 @@
 		{/if}
 
 		<div class="ml-auto flex flex-wrap items-center gap-2">
+			<div class="flex items-center gap-1" role="group" aria-label="Filter by level">
+				<button
+					type="button"
+					onclick={() => (levelFilter = null)}
+					aria-pressed={levelFilter === null}
+					title="Show every level, including lines with no level"
+					data-testid="level-all"
+					class="{levelChip} {levelFilter === null
+						? 'border-sky-700 bg-sky-950/60 text-sky-200'
+						: 'border-neutral-800 bg-neutral-900 text-neutral-400 hover:border-neutral-700'}"
+				>
+					All
+				</button>
+				{#each LEVEL_CHIPS as chip (chip.level)}
+					<button
+						type="button"
+						onclick={() => (levelFilter = levelFilter === chip.level ? null : chip.level)}
+						aria-pressed={levelFilter === chip.level}
+						title="Show only {chip.label} lines ({levelCounts[chip.level] ?? 0} loaded)"
+						data-testid="level-{chip.level}"
+						class="{levelChip} {levelFilter === chip.level
+							? chip.activeClass
+							: 'border-neutral-800 bg-neutral-900 text-neutral-400 hover:border-neutral-700'}"
+					>
+						{chip.label}
+						{#if (levelCounts[chip.level] ?? 0) > 0}
+							<span class="ml-1 opacity-70">{formatCount(levelCounts[chip.level] ?? 0)}</span>
+						{/if}
+					</button>
+				{/each}
+			</div>
 			<input
 				type="search"
 				aria-label="Filter log lines"
@@ -398,7 +503,7 @@
 								? 'cursor-pointer'
 								: ''}"
 							data-testid="log-line"
-							data-level={row.level}
+							data-level={row.level ?? 'unknown'}
 							data-expandable={expandable ? 'true' : undefined}
 							data-expanded={open ? 'true' : undefined}
 							role={expandable ? 'button' : undefined}

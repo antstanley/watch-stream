@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { formatBytes, formatCount } from '$lib/format';
-	import { MAX_GROUP_ROWS, noGroupsMessage } from '$lib/groups-client';
-	import type { LogGroupSummary } from '$lib/types';
+	import { formatBytes, formatCount, formatTimestamp } from '$lib/format';
+	import { MAX_GROUP_ROWS, noArchivedGroupsMessage, noGroupsMessage } from '$lib/groups-client';
+	import type { LogGroupSummary, StreamSource } from '$lib/types';
 
 	type Props = {
 		/** Groups returned for the active region. */
 		groups?: LogGroupSummary[];
+		/** Where the list came from; the archive list shows local counts instead of sizes. */
+		source?: StreamSource;
 		/** Active region, used for context in the empty state. */
 		region?: string;
 		/** Group name currently being tailed. */
@@ -23,6 +25,7 @@
 
 	let {
 		groups = [],
+		source = 'cloudwatch',
 		region = '',
 		selected = null,
 		loading = false,
@@ -33,6 +36,22 @@
 	}: Props = $props();
 
 	let search = $state('');
+
+	/** True when the list holds archived groups rather than live CloudWatch ones. */
+	let archived = $derived(source === 'archive');
+
+	/** Badge text for a group: how many events the archive holds for it. */
+	function archivedCount(group: LogGroupSummary): string | null {
+		return group.archivedEvents === undefined
+			? null
+			: `${formatCount(group.archivedEvents)} archived`;
+	}
+
+	/** `oldest -> newest` span of a group's archived events, or `null` when unknown. */
+	function archivedSpan(group: LogGroupSummary): string | null {
+		if (group.archivedOldest === undefined || group.archivedNewest === undefined) return null;
+		return `${formatTimestamp(group.archivedOldest)} \u2192 ${formatTimestamp(group.archivedNewest)}`;
+	}
 
 	/** Groups matching the search box, case-insensitively. */
 	let filtered = $derived(
@@ -54,10 +73,20 @@
 <section class="flex min-h-0 flex-1 flex-col gap-3">
 	<div class="flex items-center justify-between gap-2">
 		<div class="flex items-baseline gap-2">
-			<h2 class="text-sm font-semibold text-neutral-200">Log groups</h2>
+			<h2 class="text-sm font-semibold text-neutral-200">
+				{archived ? 'Archived groups' : 'Log groups'}
+			</h2>
 			<span class="text-xs text-neutral-500" data-testid="group-count">
 				{formatCount(filtered.length)} of {formatCount(groups.length)}
 			</span>
+			{#if archived}
+				<span
+					class="rounded-full border border-teal-900 bg-teal-950/50 px-1.5 py-0.5 text-[0.625rem] font-medium text-teal-300"
+					data-testid="group-source-badge"
+				>
+					local
+				</span>
+			{/if}
 		</div>
 		<button
 			type="button"
@@ -101,7 +130,7 @@
 			data-testid="group-empty"
 			class="rounded-md border border-neutral-800 bg-neutral-900/60 px-3 py-2 text-xs leading-5 text-neutral-400"
 		>
-			{noGroupsMessage(region)}
+			{archived ? noArchivedGroupsMessage(region) : noGroupsMessage(region)}
 		</p>
 	{:else if visible.length === 0}
 		<p data-testid="group-no-match" class="px-1 py-2 text-xs text-neutral-500">
@@ -121,7 +150,28 @@
 						)}"
 					>
 						<span class="truncate font-mono">{group.name}</span>
-						{#if group.storedBytes !== undefined}
+						{#if archived}
+							<span class="flex shrink-0 items-center gap-1.5">
+								{#if archivedCount(group) !== null}
+									<span
+										data-testid="group-archived-count"
+										title={archivedSpan(group) ?? 'Events held in the local DuckDB archive'}
+										class="rounded-full border border-teal-900 bg-teal-950/50 px-1.5 py-0.5 text-[0.625rem] font-medium text-teal-300"
+									>
+										{archivedCount(group)}
+									</span>
+								{/if}
+								{#if archivedSpan(group) !== null}
+									<!-- The span needs room, so it only appears on wide sidebars. -->
+									<span
+										class="hidden text-[0.6875rem] text-neutral-500 xl:inline"
+										data-testid="group-archived-span"
+									>
+										{archivedSpan(group)}
+									</span>
+								{/if}
+							</span>
+						{:else if group.storedBytes !== undefined}
 							<span class="shrink-0 text-[0.6875rem] text-neutral-500">
 								{formatBytes(group.storedBytes)}
 							</span>

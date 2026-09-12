@@ -73,6 +73,12 @@ function registerCompletionSpec(profiles: string[] = []): void {
 	t.option('print', 'Print the environment and exit');
 	t.option('list', 'List AWS profiles and exit');
 	t.option('verbose', 'Log the server output');
+	t.option('db', 'Database file for local history', function (complete) {
+		complete('./logs.duckdb', 'archive in the current directory');
+		complete('~/watch-tail.duckdb', 'archive in your home directory');
+	});
+	t.option('archive', 'Keep a local history archive (default)');
+	t.option('no-archive', 'Do not keep a local history archive');
 	t.option('help', 'Show help', undefined, 'h');
 	t.option('version', 'Show the version', undefined, 'v');
 

@@ -10,34 +10,159 @@
  *   the user resumes.
  */
 
+import { findJsonInMessage } from './log-format';
 import type { LogEventDto } from './types';
 
 /** Maximum number of lines kept in the visible client buffer. */
 export const DEFAULT_CAPACITY = 5000;
 
-/** Heuristic severity used only for colouring log lines. */
+/** Severity used for colouring log lines and for the archive's `level` column. */
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+/** Where a level came from: the payload declared it, or the text was matched. */
+type LevelSource = 'json' | 'text';
+
+/**
+ * A detected level plus its provenance.
+ *
+ * `level: null` means the line carried no usable signal. That distinction
+ * matters: "no level found" is not the same claim as "the app said info", and
+ * the archive stores it as `NULL`.
+ */
+export type DetectedLevel = { level: LogLevel | null; source: LevelSource | null };
 
 const ERROR_PATTERN =
 	/\b(ERROR|FATAL|CRITICAL|CRIT|PANIC|EXCEPTION|TRACEBACK|SEVERE|FAILED|FAILURE)\b/;
 const WARN_PATTERN = /\b(WARN|WARNING)\b/;
 const DEBUG_PATTERN = /\b(DEBUG|TRACE|VERBOSE)\b/;
 
+/** Payload keys checked, in order, for a level the producer declared. */
+export const LEVEL_KEYS = ['level', 'severity', 'lvl', 'logLevel', 'log_level'] as const;
+
 /**
- * Guesses the severity of a log line from its text.
- * Plain structured logs such as `{"level":"WARN"}` are detected too, because the level word is
- * matched anywhere in the message. Order of precedence: error, warn, debug, info.
+ * Declared level words mapped onto the four levels the UI knows.
+ *
+ * The vocabulary is deliberately small: `fatal` and `critical` are errors to
+ * everyone reading a log, and collapsing them keeps the filter and the colours
+ * honest instead of inventing levels nothing else understands.
  */
-export function detectLevel(message: string): LogLevel {
-	const upper = (message ?? '').toUpperCase();
-	if (ERROR_PATTERN.test(upper)) return 'error';
-	if (WARN_PATTERN.test(upper)) return 'warn';
-	if (DEBUG_PATTERN.test(upper)) return 'debug';
-	return 'info';
+const LEVEL_WORDS: Record<string, LogLevel> = {
+	trace: 'debug',
+	verbose: 'debug',
+	debug: 'debug',
+	info: 'info',
+	information: 'info',
+	notice: 'info',
+	note: 'info',
+	warn: 'warn',
+	warning: 'warn',
+	error: 'error',
+	err: 'error',
+	exception: 'error',
+	fatal: 'error',
+	critical: 'error',
+	crit: 'error',
+	panic: 'error',
+	severe: 'error',
+	alert: 'error',
+	emergency: 'error',
+};
+
+/**
+ * Bunyan/pino style numeric levels.
+ *
+ * Only exact known values are mapped: a bare number such as `{"level":0}` means
+ * different things in different loggers, so an unknown number falls through to
+ * the text heuristic instead of being guessed at.
+ */
+const NUMERIC_LEVELS: Record<number, LogLevel> = {
+	10: 'debug',
+	20: 'debug',
+	30: 'info',
+	40: 'warn',
+	50: 'error',
+	60: 'error',
+};
+
+/** True when a value is one of the four known levels. */
+export function isLogLevel(value: unknown): value is LogLevel {
+	return value === 'error' || value === 'warn' || value === 'info' || value === 'debug';
 }
 
-/** Tailwind text colour class for a severity. */
-export function levelColorClass(level: LogLevel): string {
+/** Converts one declared JSON value into a level, or `null` when unrecognised. */
+export function levelFromDeclared(value: unknown): LogLevel | null {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return NUMERIC_LEVELS[value] ?? null;
+	}
+	if (typeof value !== 'string') return null;
+	const word = value.trim().toLowerCase();
+	if (word.length === 0) return null;
+	return LEVEL_WORDS[word] ?? null;
+}
+
+/**
+ * Level the payload declares, when the line carries a JSON object with a known
+ * level key. Whole messages and "prefix then payload" lines are both handled,
+ * by the same parser the viewer uses to pretty-print JSON.
+ */
+function declaredLevel(message: string): LogLevel | null {
+	const payload = findJsonInMessage(message);
+	if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null;
+	const record = payload as Record<string, unknown>;
+	for (const key of LEVEL_KEYS) {
+		const level = levelFromDeclared(record[key]);
+		if (level !== null) return level;
+	}
+	return null;
+}
+
+/**
+ * Detects the severity of a log line.
+ *
+ * A level the payload declares wins, because it is a statement of fact; the
+ * text heuristic is the fallback for the many logs that declare nothing. The
+ * heuristic matches level words anywhere in the line, so
+ * `{"level":"info","msg":"retry after error count 0"}` is `info`, not `error`.
+ */
+export function detectLevelWithSource(message: string): DetectedLevel {
+	const declared = declaredLevel(message ?? '');
+	if (declared !== null) return { level: declared, source: 'json' };
+	const upper = (message ?? '').toUpperCase();
+	if (ERROR_PATTERN.test(upper)) return { level: 'error', source: 'text' };
+	if (WARN_PATTERN.test(upper)) return { level: 'warn', source: 'text' };
+	if (DEBUG_PATTERN.test(upper)) return { level: 'debug', source: 'text' };
+	return { level: null, source: null };
+}
+
+/**
+ * Guesses the severity of a log line from its text, or returns `null` when the
+ * line carries no signal at all (a stack-trace continuation, for example).
+ */
+export function detectLevel(message: string): LogLevel | null {
+	return detectLevelWithSource(message).level;
+}
+
+/** Level of an event: what the server detected, else a guess from the text. */
+export function effectiveLevel(event: LogEventDto): LogLevel | null {
+	return event.level !== undefined ? event.level : detectLevel(event.message);
+}
+
+/** True when an event passes a level filter; a `null` filter accepts every line. */
+export function matchesLevel(event: LogEventDto, level: LogLevel | null): boolean {
+	return level === null || effectiveLevel(event) === level;
+}
+
+/** Filters events by level, keeping every line when `level` is `null`. */
+export function filterByLevel(
+	events: readonly LogEventDto[],
+	level: LogLevel | null,
+): LogEventDto[] {
+	if (level === null) return events.slice();
+	return events.filter((event) => matchesLevel(event, level));
+}
+
+/** Tailwind text colour class for a severity; an unknown level stays neutral. */
+export function levelColorClass(level: LogLevel | null): string {
 	switch (level) {
 		case 'error':
 			return 'text-red-400';

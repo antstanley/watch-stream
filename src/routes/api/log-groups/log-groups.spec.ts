@@ -35,6 +35,19 @@ vi.mock('$lib/server/aws', async (importOriginal) => {
 	};
 });
 
+/** Archive double: listing history must never touch a real DuckDB file. */
+const archiveGroups: { current: unknown[] } = { current: [] };
+
+vi.mock('$lib/server/archive', () => ({
+	getArchive: async () => ({
+		available: true,
+		error: null,
+		async groups() {
+			return archiveGroups.current;
+		},
+	}),
+}));
+
 type PollResult = { logGroups?: LogGroup[]; nextToken?: string } | Error;
 
 /** Queues the responses the fake client returns in order. */
@@ -80,6 +93,7 @@ describe('GET /api/log-groups', () => {
 		expect(await response.json()).toEqual({
 			region: 'us-west-2',
 			endpoint: null,
+			source: 'cloudwatch',
 			groups: [{ name: '/aws/lambda/checkout', arn: 'arn:checkout', storedBytes: 1024 }],
 		});
 		const command = mocks.send.mock.calls[0][0] as DescribeLogGroupsCommand;
@@ -145,7 +159,12 @@ describe('GET /api/log-groups', () => {
 		envState.current = { AWS_REGION: 'eu-west-1', WATCH_STREAM_LIMIT: 'lots' };
 		const response = await GET(requestEvent(''));
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ region: 'eu-west-1', endpoint: null, groups: [] });
+		expect(await response.json()).toEqual({
+			region: 'eu-west-1',
+			endpoint: null,
+			source: 'cloudwatch',
+			groups: [],
+		});
 	});
 
 	test('lets the query parameter win over WATCH_STREAM_LIMIT', async () => {
@@ -244,5 +263,65 @@ describe('GET /api/log-groups', () => {
 		expect(response.status).toBe(502);
 		expect(text).not.toContain('at ');
 		expect(text).not.toContain('\n');
+	});
+});
+
+describe('GET /api/log-groups source=archive', () => {
+	beforeEach(() => {
+		envState.current = { AWS_REGION: 'eu-west-1' };
+		mocks.send.mockReset();
+		archiveGroups.current = [];
+	});
+
+	test('lists the groups the archive holds without calling CloudWatch', async () => {
+		archiveGroups.current = [
+			{ region: 'af-south-1', logGroup: '/aws/lambda/api', events: 12, oldest: 1000, newest: 2000 },
+			{ region: 'af-south-1', logGroup: '/aws/lambda/worker', events: 3, oldest: 500, newest: 900 },
+		];
+		const response = await GET(requestEvent('?source=archive&region=af-south-1'));
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			region: 'af-south-1',
+			endpoint: null,
+			source: 'archive',
+			groups: [
+				{
+					name: '/aws/lambda/api',
+					archivedEvents: 12,
+					archivedOldest: 1000,
+					archivedNewest: 2000,
+				},
+				{
+					name: '/aws/lambda/worker',
+					archivedEvents: 3,
+					archivedOldest: 500,
+					archivedNewest: 900,
+				},
+			],
+		});
+		expect(mocks.send).not.toHaveBeenCalled();
+	});
+
+	test('filters by prefix and honours the limit', async () => {
+		archiveGroups.current = [
+			{ region: 'af-south-1', logGroup: '/aws/lambda/api', events: 1, oldest: 1, newest: 2 },
+			{ region: 'af-south-1', logGroup: '/aws/lambda/worker', events: 1, oldest: 1, newest: 2 },
+		];
+		const filtered = await GET(
+			requestEvent('?source=archive&region=af-south-1&prefix=/aws/lambda/w'),
+		);
+		expect(
+			((await filtered.json()) as { groups: { name: string }[] }).groups.map((g) => g.name),
+		).toEqual(['/aws/lambda/worker']);
+
+		const limited = await GET(requestEvent('?source=archive&region=af-south-1&limit=1'));
+		expect(((await limited.json()) as { groups: unknown[] }).groups).toHaveLength(1);
+	});
+
+	test('rejects an unknown source', async () => {
+		const response = await GET(requestEvent('?source=duckdb'));
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ code: 'invalid-source' });
+		expect(mocks.send).not.toHaveBeenCalled();
 	});
 });

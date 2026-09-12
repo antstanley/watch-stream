@@ -9,18 +9,22 @@ import {
 	resolveAwsConfig,
 	resolveEffectiveRegion,
 } from '$lib/server/aws';
+import { getArchive } from '$lib/server/archive';
 import { readEnv } from '$lib/server/env';
-import { listLogGroups } from '$lib/server/log-groups';
+import { listArchivedGroups, listLogGroups } from '$lib/server/log-groups';
+import { SOURCE_PARAM_HINT, parseSourceParam } from '$lib/server/source';
 import type { LogGroupsResponse } from '$lib/types';
 
 const MAX_LIMIT = 1000;
 
 /**
- * `GET /api/log-groups?region=&prefix=&limit=` - lists log groups for a region.
+ * `GET /api/log-groups?region=&prefix=&limit=&source=` - lists log groups.
  *
- * The region is optional: without it the SDK resolves the region from the
- * ambient AWS configuration. `request.signal` is forwarded to the SDK so a
- * disconnected client cancels the pagination loop.
+ * `source=cloudwatch` (the default) asks CloudWatch Logs for the region; the
+ * region is optional there, because the SDK resolves it from the ambient AWS
+ * configuration. `source=archive` lists what the local DuckDB file holds for
+ * that region and needs no credentials at all. `request.signal` is forwarded to
+ * the SDK so a disconnected client cancels the pagination loop.
  */
 export const GET = async ({ url, request }: RequestEvent): Promise<Response> => {
 	const parsedRegion = parseRegionParam(url.searchParams.get('region'));
@@ -48,7 +52,22 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 	}
 
 	const prefix = url.searchParams.get('prefix')?.trim();
+	const source = parseSourceParam(url.searchParams.get('source'));
+	if (source === null) return apiError(400, SOURCE_PARAM_HINT, 'invalid-source');
 	const config = resolveAwsConfig(env, parsedRegion.region);
+
+	if (source === 'archive') {
+		const archive = await getArchive(env);
+		const groups = listArchivedGroups(await archive.groups(config.region), { prefix, limit });
+		const body: LogGroupsResponse = {
+			region: config.region ?? '',
+			endpoint: null,
+			source,
+			groups,
+		};
+		return json(body);
+	}
+
 	let client: CloudWatchLogsClient | undefined;
 
 	try {
@@ -59,7 +78,7 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 			limit,
 			signal: request.signal,
 		});
-		const body: LogGroupsResponse = { region, endpoint: config.endpoint, groups };
+		const body: LogGroupsResponse = { region, endpoint: config.endpoint, source, groups };
 		return json(body);
 	} catch (error) {
 		if (request.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {

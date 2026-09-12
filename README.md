@@ -47,6 +47,10 @@ work for every line.
   actions, and binds to loopback. Throwaway keys are used for a local emulator and only there.
 - **It is one command and it goes away.** `npx watch-tail`, Ctrl+C. Nothing is deployed, nothing is
   sent anywhere, and there is no agent, sidecar or daemon to clean up.
+- **You keep what you have seen.** Logs you stream are appended to a local DuckDB file, so the incident
+  you looked at last week is still there - no re-scanning AWS, no 14-day cliff, no credentials needed
+  to read it back. Switch the source to **Local archive** in the UI and the same window controls work
+  against that file.
 
 Use it when you are debugging a Lambda, chasing an API Gateway 5xx, watching a worker drain a queue,
 or handing a teammate a link that shows exactly the window you are staring at.
@@ -62,6 +66,13 @@ or handing a teammate a link that shows exactly the window you are staring at.
 - **Shareable views** - region, group, mode and window all live in the URL.
 - **Local emulation friendly** - `--floci` points at [floci](https://floci.io) on port 4566 for
   development without an AWS account.
+- **History that outlives the window** - everything you stream is archived to a local
+  [DuckDB](https://duckdb.org) file, so you can come back to it later - after the 14-day CloudWatch
+  limit, with no AWS credentials at all - and query it with plain SQL.
+- **Severity you can filter on.** Every archived line is tagged `error`, `warn`, `info` or `debug`,
+  and the viewer has chips to narrow to one level. A level the log itself declares
+  (`{"level":"error"}`) is trusted; otherwise it is read from the line, and a line that carries no
+  level at all stays unclassified instead of being called `info`.
 
 ## Install
 
@@ -93,6 +104,8 @@ watch-tail [options]
       --print            Print the environment that would be used, then exit
       --list             List the AWS profiles found on disk, then exit
       --verbose          Log the server's own output
+      --db <path>        Database file for local history (default: app data dir)
+      --no-archive       Do not keep a local history archive
   -h, --help             Show this help
   -v, --version          Show the version
 ```
@@ -206,11 +219,87 @@ npx watch-tail --floci             # throwaway credentials are supplied automati
 sets `AWS_ENDPOINT_URL` - as this repository's `pnpm floci:up` writes for the dev server - the CLI
 ignores it, says so, and runs against real AWS; your own exported variables always win over that file.
 
+## Local history
+
+While a stream is open, every event that arrives is appended to a local DuckDB file. Nothing else
+changes: the live tail, the historic scan and the UI work exactly as before. What the archive adds is
+a **second source** you can read later.
+
+In the UI, a **Local archive** toggle appears next to the mode controls whenever the archive is
+available. Choosing it:
+
+- lists the log groups the archive holds for the current region, with how many events are stored
+  locally,
+- replays a window from the file instead of calling CloudWatch - instant, and **no credentials
+  needed**, so it works with an expired SSO session, offline, or on a machine that never had AWS
+  access,
+- keeps the same range controls (`15m` … `5d`, or a custom `from`/`to`), and puts the source in the URL
+  so `…&source=archive&range=24h` is a shareable view of the archive.
+
+```bash
+watch-tail                            # archive on, file in your app data directory
+watch-tail --db ./logs.duckdb         # keep the archive next to the project instead
+watch-tail --no-archive               # do not archive anything
+```
+
+The default file is `archive.duckdb` inside your platform's data directory:
+
+| Platform | Path                                                         |
+| -------- | ------------------------------------------------------------ |
+| macOS    | `~/Library/Application Support/watch-tail/archive.duckdb`    |
+| Linux    | `${XDG_DATA_HOME:-~/.local/share}/watch-tail/archive.duckdb` |
+| Windows  | `%LOCALAPPDATA%\watch-tail\archive.duckdb`                   |
+
+`WATCH_STREAM_ARCHIVE=off` turns the archive off for the server, and `WATCH_STREAM_ARCHIVE_DB` sets the
+file, for people who drive the server directly.
+
+Because it is a DuckDB database, you can point any DuckDB client at the same file - with the app
+stopped, since DuckDB allows one writer:
+
+```bash
+duckdb ~/Library/Application\ Support/watch-tail/archive.duckdb
+```
+
+```sql
+SELECT log_group, count(*) AS events, max(timestamp_ms) AS newest
+FROM log_events
+GROUP BY log_group
+ORDER BY events DESC;
+
+SELECT to_timestamp(timestamp_ms / 1000) AS at, message
+FROM log_events
+WHERE log_group = '/aws/lambda/checkout' AND message ILIKE '%timeout%'
+ORDER BY timestamp_ms;
+
+-- how many errors per group, ignoring levels that were never detected
+SELECT log_group, level, count(*) AS events
+FROM log_events
+WHERE level = 'error'
+GROUP BY log_group, level
+ORDER BY events DESC;
+```
+
+Three things worth knowing:
+
+- **DuckDB is an optional dependency.** It is a native module (roughly 114 MB installed, prebuilt for
+  every supported platform - no compiler needed). If it cannot be installed or loaded, `watch-tail`
+  runs exactly as it did before, without history, and says so in the startup banner. To skip it
+  deliberately: `npm install -g watch-tail --no-optional`.
+- **One process owns the file.** DuckDB takes an exclusive lock, so a second `watch-tail` on the same
+  archive runs without history while the first is up; `--db` is the way to keep two instances
+  separate.
+- Levels are detected, not received: CloudWatch Logs does not report a severity, so `error`/`warn`/
+  `info`/`debug` come from the line itself, and `NULL` means nothing could be read from it.
+- **The archive is as wide as what you watched.** Events are recorded as they stream, so history covers
+  the windows you have actually visited. It is also local, unencrypted and outside your AWS account -
+  treat the file like the logs themselves.
+
 ## Development
 
 ```bash
 pnpm install
 pnpm dev                                  # SvelteKit dev server on http://localhost:5173
+                                          #   (its history archive lives in .watch-tail/)
 pnpm seed                                 # fixtures in the local emulator (--watch for live traffic)
 pnpm dev:aws --profile my-profile         # dev server against a real profile
 pnpm build                                # adapter-node build + the CLI in dist/
@@ -258,6 +347,13 @@ SvelteKit server routes (Node)
   v
 CloudWatch Logs API   -- ambient AWS credentials
   or floci on http://localhost:4566
+
+Everything streamed is also appended to a local archive,
+which the UI can read back without AWS:
+
+  SvelteKit server ---- @duckdb/node-api ----> archive.duckdb (DuckDB file)
+                                             ^
+  Browser  -- GET /api/stream?source=archive -+
 ```
 
 The CLI (`src/cli/`) boots the packaged adapter-node server, waits for `/api/health` and opens a
@@ -273,6 +369,11 @@ browser. Full details, including the HTTP and SSE contract, are in [ARCHITECTURE
   Binding elsewhere prints a warning - only do it on a trusted network.
 - floci omits `logStreamName` in `FilterLogEvents`, so the stream column stays empty locally; real AWS
   fills it.
+- The archive is written from the same process that serves the UI, so it only grows while something is
+  streaming. A window you never opened is not in it, and events dropped by the 10 000-event cap of a
+  historic scan are not archived either.
+- Archived events are de-duplicated by CloudWatch event id (or by a hash of timestamp, stream and
+  message when an emulator omits ids), so re-scanning the same window does not duplicate rows.
 
 ## License
 

@@ -101,6 +101,9 @@
 		"vite": "^8.0.16",
 		"vitest": "^4.1.8"
 	},
+	"optionalDependencies": {
+		"@duckdb/node-api": "^1.5.5-r.4"
+	},
 	"engines": {
 		"node": ">=22"
 	},

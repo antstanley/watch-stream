@@ -1,3 +1,5 @@
+import type { LogLevel } from './log-buffer';
+
 /**
  * Shared wire types between the SvelteKit server routes and the browser UI.
  * Keep this file free of runtime imports so both sides can import it.
@@ -17,12 +19,50 @@ export type LogGroupSummary = {
 	retentionInDays?: number;
 	/** Epoch milliseconds. */
 	creationTime?: number;
+	/** Archive listings only: events held locally for this group. */
+	archivedEvents?: number;
+	/** Archive listings only: oldest archived event, epoch milliseconds. */
+	archivedOldest?: number;
+	/** Archive listings only: newest archived event, epoch milliseconds. */
+	archivedNewest?: number;
 };
+
+/**
+ * Where a view gets its events, and where the group list comes from.
+ *
+ * `cloudwatch` reads the live API with ambient credentials; `archive` reads the
+ * local DuckDB file and needs no AWS access at all.
+ */
+export type StreamSource = 'cloudwatch' | 'archive';
 
 export type LogGroupsResponse = {
 	region: string;
 	endpoint: string | null;
+	/** Where the list came from; the archive needs no credentials. */
+	source: StreamSource;
 	groups: LogGroupSummary[];
+};
+
+/** Answer of `GET /api/archive` - what the local DuckDB archive holds. */
+export type ArchiveStatusResponse = {
+	/** Database file in use. */
+	path: string;
+	/** False when DuckDB is missing or the file cannot be opened. */
+	available: boolean;
+	/** Why the archive is unavailable, or the last failure, or `null`. */
+	error: string | null;
+	/** Size of the database file, or `null` when it does not exist yet. */
+	bytes: number | null;
+	/** Archived events. */
+	rows: number;
+	/** Distinct log groups. */
+	groups: number;
+	/** Distinct regions. */
+	regions: number;
+	/** Oldest archived event, epoch ms. */
+	oldest: number | null;
+	/** Newest archived event, epoch ms. */
+	newest: number | null;
 };
 
 export type LogEventDto = {
@@ -33,6 +73,12 @@ export type LogEventDto = {
 	message: string;
 	streamName?: string;
 	ingestionTime?: number;
+	/**
+	 * Severity detected on the server (`error` | `warn` | `info` | `debug`), or
+	 * `null` when the line carried no level. Absent means "not detected here", and
+	 * the client falls back to its own guess.
+	 */
+	level?: LogLevel | null;
 };
 
 export type ApiErrorBody = {
@@ -70,6 +116,8 @@ export type StreamReadyPayload = {
 	region: string;
 	logGroupName: string;
 	endpoint: string | null;
+	/** Where this stream reads from. */
+	source: StreamSource;
 	/** Inclusive start of the window, epoch ms. */
 	startTime: number;
 	/** Inclusive end of a historic window, or `null` while tailing live. */

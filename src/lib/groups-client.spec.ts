@@ -1,20 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+	ARCHIVE_NOTE,
 	ApiError,
 	DEFAULT_REGIONS,
 	apiErrorMessage,
 	buildLogGroupsUrl,
+	describeArchive,
 	describeGroupsError,
 	describeStreamError,
+	fetchArchiveStatus,
 	fetchHealth,
 	fetchLogGroups,
 	fetchRegions,
 	isApiErrorBody,
+	noArchivedGroupsMessage,
 	noGroupsMessage,
 	sortGroups,
 } from './groups-client';
 import type { FetchLike } from './groups-client';
-import type { HealthResponse } from './types';
+import type { ArchiveStatusResponse, HealthResponse } from './types';
 
 /** Builds a fake fetch that returns one JSON body. */
 function stubFetch(body: unknown, status = 200): FetchLike {
@@ -41,6 +45,12 @@ describe('buildLogGroupsUrl', () => {
 		expect(buildLogGroupsUrl({ region: 'us-east-1' })).toBe('/api/log-groups?region=us-east-1');
 		expect(buildLogGroupsUrl({ region: 'us-east-1', prefix: '/aws/lambda', limit: 50 })).toBe(
 			'/api/log-groups?region=us-east-1&prefix=%2Faws%2Flambda&limit=50',
+		);
+	});
+
+	it('carries the source parameter for the local archive', () => {
+		expect(buildLogGroupsUrl({ region: 'us-east-1', source: 'archive' })).toBe(
+			'/api/log-groups?region=us-east-1&source=archive',
 		);
 	});
 });
@@ -118,6 +128,24 @@ describe('fetchLogGroups', () => {
 		expect((failure as ApiError).code).toBe('AccessDeniedException');
 	});
 
+	it('passes the archive source through as a query parameter', async () => {
+		const body = {
+			region: 'us-east-1',
+			endpoint: null,
+			source: 'archive',
+			groups: [{ name: '/aws/app', archivedEvents: 4 }],
+		};
+		const fetchImpl = stubFetch(body);
+		const response = await fetchLogGroups({ region: 'us-east-1', source: 'archive', fetchImpl });
+
+		expect(fetchImpl).toHaveBeenCalledWith(
+			'/api/log-groups?region=us-east-1&source=archive',
+			expect.anything(),
+		);
+		expect(response.source).toBe('archive');
+		expect(response.groups[0].archivedEvents).toBe(4);
+	});
+
 	it('wraps a network failure in an ApiError', async () => {
 		const fetchImpl = vi.fn<FetchLike>(async () => {
 			throw new TypeError('fetch failed');
@@ -128,6 +156,61 @@ describe('fetchLogGroups', () => {
 		);
 		expect(failure).toBeInstanceOf(ApiError);
 		expect((failure as ApiError).message).toContain('Could not reach');
+	});
+});
+
+describe('fetchArchiveStatus', () => {
+	const available: ArchiveStatusResponse = {
+		path: '/tmp/archive.duckdb',
+		available: true,
+		error: null,
+		bytes: 4096,
+		rows: 12,
+		groups: 3,
+		regions: 2,
+		oldest: 1000,
+		newest: 2000,
+	};
+
+	it('requests /api/archive and returns the totals', async () => {
+		const fetchImpl = stubFetch(available);
+		const response = await fetchArchiveStatus({ fetchImpl });
+
+		expect(fetchImpl).toHaveBeenCalledWith('/api/archive', expect.anything());
+		expect(response.available).toBe(true);
+		expect(response.path).toBe('/tmp/archive.duckdb');
+		expect(response.groups).toBe(3);
+	});
+
+	it('returns the unavailable answer of the route as data, not as an error', async () => {
+		const fetchImpl = stubFetch({
+			...available,
+			available: false,
+			error: 'Cannot find module @duckdb/node-api',
+			bytes: null,
+			rows: 0,
+			groups: 0,
+			regions: 0,
+			oldest: null,
+			newest: null,
+		});
+		const response = await fetchArchiveStatus({ fetchImpl });
+
+		expect(response.available).toBe(false);
+		expect(response.error).toContain('@duckdb/node-api');
+	});
+
+	it('throws an ApiError when the API itself is unreachable', async () => {
+		const fetchImpl = vi.fn<FetchLike>(async () => {
+			throw new TypeError('fetch failed');
+		});
+		const failure = await fetchArchiveStatus({ fetchImpl }).then(
+			() => null,
+			(error: unknown) => error,
+		);
+
+		expect(failure).toBeInstanceOf(ApiError);
+		expect((failure as ApiError).message).toContain('Could not reach /api/archive');
 	});
 });
 
@@ -161,5 +244,21 @@ describe('error messages', () => {
 			'group not found (/aws/app in us-east-1)',
 		);
 		expect(describeStreamError('us-east-1', null, 'gone')).toBe('gone (us-east-1)');
+	});
+
+	it('explains an empty archive list without calling it an error', () => {
+		expect(noArchivedGroupsMessage('us-east-1')).toBe(
+			'Nothing archived for us-east-1 yet - stream a group from CloudWatch once and it will appear here.',
+		);
+		expect(noArchivedGroupsMessage('')).toContain('this region');
+	});
+
+	it('describes the archive and names the database file behind it', () => {
+		expect(describeArchive('/tmp/watch-tail/archive.duckdb')).toBe(
+			'Locally archived events instead of live CloudWatch data (/tmp/watch-tail/archive.duckdb)',
+		);
+		expect(describeArchive(null)).toBe('Locally archived events instead of live CloudWatch data');
+		expect(describeArchive('   ')).toBe('Locally archived events instead of live CloudWatch data');
+		expect(ARCHIVE_NOTE).toContain('no CloudWatch credentials');
 	});
 });

@@ -116,6 +116,23 @@ describe('buildStreamUrl', () => {
 			'http://localhost:5173/api/stream?region=r&group=g',
 		);
 	});
+
+	it('adds source=archive for the local archive', () => {
+		const url = new URL(
+			buildStreamUrl({ region: 'us-east-1', group: '/aws/app', source: 'archive' }),
+			'http://localhost',
+		);
+		expect(url.searchParams.get('source')).toBe('archive');
+		expect(url.searchParams.get('region')).toBe('us-east-1');
+		expect(url.searchParams.get('group')).toBe('/aws/app');
+	});
+
+	it('leaves the CloudWatch URL untouched', () => {
+		// The server defaults to CloudWatch, so an explicit source adds nothing.
+		expect(buildStreamUrl({ region: 'us-east-1', group: 'g', source: 'cloudwatch' })).toBe(
+			'/api/stream?region=us-east-1&group=g',
+		);
+	});
 });
 
 describe('LogStream connection lifecycle', () => {
@@ -394,5 +411,59 @@ describe('historic targets', () => {
 		source.emit('end', { reason: 'window-complete' });
 		expect(stream.status).toBe('ended');
 		expect(stream.endReason).toBe('window-complete');
+	});
+});
+
+describe('archive targets', () => {
+	it('asks the archive for a historic window and reports the source from the ready frame', () => {
+		const stream = makeStream();
+		stream.start({
+			region: 'us-east-1',
+			group: '/aws/app',
+			source: 'archive',
+			mode: 'historic',
+			range: '24h',
+		});
+
+		const source = FakeEventSource.last();
+		expect(source.url).toContain('source=archive');
+		expect(source.url).toContain('mode=historic');
+		expect(source.url).toContain('range=24h');
+
+		source.emit('ready', {
+			region: 'us-east-1',
+			logGroupName: '/aws/app',
+			endpoint: null,
+			source: 'archive',
+			startTime: 1_000,
+			endTime: 2_000,
+			mode: 'historic',
+			preset: '24h',
+			clamped: false,
+		});
+
+		expect(stream.ready?.source).toBe('archive');
+		expect(stream.ready?.endpoint).toBeNull();
+		expect(stream.target?.source).toBe('archive');
+	});
+
+	it('ends by itself once the archived window is exhausted', () => {
+		const stream = makeStream();
+		stream.start({
+			region: 'us-east-1',
+			group: '/aws/app',
+			source: 'archive',
+			mode: 'historic',
+			range: '1h',
+		});
+		const source = FakeEventSource.last();
+		source.emit('log', { events: [logEvent(1)] });
+		source.emit('end', { reason: 'window-complete' });
+
+		expect(stream.status).toBe('ended');
+		expect(stream.endReason).toBe('window-complete');
+		expect(source.closed).toBe(true);
+		// The buffer survives the stream ending, so the archived window stays on screen.
+		expect(stream.lines).toHaveLength(1);
 	});
 });

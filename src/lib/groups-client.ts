@@ -1,16 +1,18 @@
 /**
  * Browser-side fetch helpers for the watch-stream JSON API (`/api/health`, `/api/regions`,
- * `/api/log-groups`). Every helper throws {@link ApiError} on a non-2xx response so the UI can show
- * the API `error` message instead of an opaque failure.
+ * `/api/log-groups`, `/api/archive`). Every helper throws {@link ApiError} on a non-2xx response so
+ * the UI can show the API `error` message instead of an opaque failure.
  */
 
 import { REGION_CODES } from './regions';
 import type {
 	ApiErrorBody,
+	ArchiveStatusResponse,
 	HealthResponse,
 	LogGroupSummary,
 	LogGroupsResponse,
 	RegionsResponse,
+	StreamSource,
 } from './types';
 
 /** Region list used by the picker before (or instead of) `/api/regions`. */
@@ -33,6 +35,8 @@ export type RequestOptions = {
 /** Options for {@link fetchLogGroups}. */
 export type LogGroupsQuery = RequestOptions & {
 	region: string;
+	/** Defaults to `cloudwatch`; `archive` lists the local DuckDB groups instead. */
+	source?: StreamSource;
 	prefix?: string;
 	limit?: number;
 };
@@ -78,11 +82,13 @@ export function apiErrorMessage(value: unknown, fallback = 'Unexpected API error
 /** Builds the `/api/log-groups` URL, including only the parameters that are set. */
 export function buildLogGroupsUrl(query: {
 	region?: string;
+	source?: StreamSource;
 	prefix?: string;
 	limit?: number;
 }): string {
 	const search = new URLSearchParams();
 	if (query.region) search.set('region', query.region);
+	if (query.source) search.set('source', query.source);
 	if (query.prefix) search.set('prefix', query.prefix);
 	if (typeof query.limit === 'number' && Number.isFinite(query.limit)) {
 		search.set('limit', String(query.limit));
@@ -148,10 +154,25 @@ export function fetchHealth(options: RequestOptions = {}): Promise<HealthRespons
 	return getJson<HealthResponse>('/api/health', options);
 }
 
-/** `GET /api/log-groups` - log groups for a region. */
+/**
+ * `GET /api/log-groups` - log groups for a region, from CloudWatch or the local archive.
+ *
+ * The archive list needs no credentials and never reaches AWS.
+ */
 export function fetchLogGroups(query: LogGroupsQuery): Promise<LogGroupsResponse> {
 	const url = buildLogGroupsUrl(query);
 	return getJson<LogGroupsResponse>(url, query);
+}
+
+/**
+ * `GET /api/archive` - what the local DuckDB archive holds.
+ *
+ * The route answers 200 even when the archive is off or unreadable, so a failed
+ * request means the API itself is unreachable and the caller should just hide
+ * the archive view.
+ */
+export function fetchArchiveStatus(options: RequestOptions = {}): Promise<ArchiveStatusResponse> {
+	return getJson<ArchiveStatusResponse>('/api/archive', options);
 }
 
 /** Maximum number of log group rows the list renders; the rest is summarised as "showing first". */
@@ -165,6 +186,23 @@ export function sortGroups(groups: readonly LogGroupSummary[]): LogGroupSummary[
 /** Message shown when a region has no log groups at all. */
 export function noGroupsMessage(region: string): string {
 	return `No log groups found in ${region}. Start floci and run \`pnpm seed\` to create sample groups.`;
+}
+
+/** Plain statement of what the archive source shows, used next to the toggle. */
+export const ARCHIVE_NOTE =
+	'Locally archived events - read from the local DuckDB file, no CloudWatch credentials, historic windows only.';
+
+/** Tooltip for the archive indicator: what it shows and which file backs it. */
+export function describeArchive(path: string | null | undefined): string {
+	const trimmed = typeof path === 'string' ? path.trim() : '';
+	const head = 'Locally archived events instead of live CloudWatch data';
+	return trimmed === '' ? head : `${head} (${trimmed})`;
+}
+
+/** Message shown when the archive holds nothing for a region. */
+export function noArchivedGroupsMessage(region: string): string {
+	const where = region === '' ? 'this region' : region;
+	return `Nothing archived for ${where} yet - stream a group from CloudWatch once and it will appear here.`;
 }
 
 /** Drops a trailing period so an appended sentence does not double up. */

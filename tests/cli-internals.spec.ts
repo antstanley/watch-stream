@@ -6,6 +6,8 @@ import { PROGRAM, SHELLS, completionScript } from '../src/cli/completions.ts';
 import { ambientProfile, readVersion, resolveCliRegion, type CliIo } from '../src/cli/index.ts';
 import { browserCommand, findAppRoot } from '../src/cli/server.ts';
 import manifest from '../package.json' with { type: 'json' };
+import { describeArchive, readArchive } from '../src/cli/preflight.ts';
+import type { ArchiveStatusResponse } from '../src/lib/types.ts';
 import { defaults } from '../src/cli/options.ts';
 
 const created: string[] = [];
@@ -81,6 +83,7 @@ function regionIo(env: NodeJS.ProcessEnv, configText = ''): CliIo {
 		probeCredentials: async () => ({ ok: true }),
 		runLogin: async () => 0,
 		readIdentity: async () => ({ ok: false, message: 'unavailable' }),
+		readArchive: async () => ({ ok: false, message: 'unavailable' }),
 		waitForHealth: async () => true,
 		startServerImpl: (() => {
 			throw new Error('not used');
@@ -157,5 +160,67 @@ describe('ambientProfile', () => {
 		expect(ambientProfile({ AWS_PROFILE: '' })).toBeNull();
 		expect(ambientProfile({ AWS_PROFILE: '   ' })).toBeNull();
 		expect(ambientProfile({})).toBeNull();
+	});
+});
+
+/** Status payload double, at module scope so it is not rebuilt per test. */
+const status = (overrides: Partial<ArchiveStatusResponse> = {}): ArchiveStatusResponse => ({
+	path: '/home/dev/.local/share/watch-tail/archive.duckdb',
+	available: true,
+	error: null,
+	bytes: 1024,
+	rows: 0,
+	groups: 0,
+	regions: 0,
+	oldest: null,
+	newest: null,
+	...overrides,
+});
+
+describe('the local history status', () => {
+	it('describes a usable archive with its count and path', () => {
+		expect(describeArchive(status({ rows: 1234 }))).toBe(
+			'history 1,234 events at /home/dev/.local/share/watch-tail/archive.duckdb',
+		);
+		expect(describeArchive(status({ rows: 1 }))).toContain('1 event at');
+	});
+
+	it('says so when the archive is empty', () => {
+		expect(describeArchive(status())).toContain('no events yet');
+	});
+
+	it('reports why an unavailable archive is unavailable', () => {
+		expect(
+			describeArchive(status({ available: false, error: 'Cannot find module @duckdb/node-api' })),
+		).toBe('local history unavailable: Cannot find module @duckdb/node-api');
+		expect(describeArchive(status({ available: false, error: null }))).toContain(
+			'unavailable: unknown reason',
+		);
+	});
+
+	it('readArchive returns the payload from /api/archive', async () => {
+		const fetchImpl = (async (input: unknown) => {
+			expect(String(input)).toBe('http://127.0.0.1:4517/api/archive');
+			return new Response(JSON.stringify(status({ rows: 7 })), { status: 200 });
+		}) as unknown as typeof fetch;
+		expect(await readArchive({ baseUrl: 'http://127.0.0.1:4517', fetchImpl })).toEqual({
+			ok: true,
+			status: status({ rows: 7 }),
+		});
+	});
+
+	it('readArchive reports a failure instead of throwing', async () => {
+		const badStatus = (async () =>
+			new Response('nope', { status: 500 })) as unknown as typeof fetch;
+		expect(await readArchive({ baseUrl: 'http://localhost:1', fetchImpl: badStatus })).toEqual({
+			ok: false,
+			message: 'HTTP 500',
+		});
+		const rejects = (async () => {
+			throw new Error('ECONNREFUSED');
+		}) as unknown as typeof fetch;
+		const failed = await readArchive({ baseUrl: 'http://localhost:1', fetchImpl: rejects });
+		expect(failed.ok).toBe(false);
+		expect(failed.ok ? '' : failed.message).toContain('ECONNREFUSED');
 	});
 });

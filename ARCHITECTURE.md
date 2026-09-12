@@ -12,6 +12,11 @@ SvelteKit server routes (Node, TypeScript)
   v
 CloudWatch Logs API  --- ambient AWS credentials
   or floci on http://localhost:4566 (when AWS_ENDPOINT_URL is set)
+
+Local history (optional, `source=archive`):
+  every streamed batch is appended to archive.duckdb through @duckdb/node-api,
+  and the UI can read the same file back without credentials:
+  Browser -- EventSource /api/stream?source=archive --> DuckDB file
 ```
 
 ## Layout
@@ -25,11 +30,17 @@ CloudWatch Logs API  --- ambient AWS credentials
 | `src/lib/server/regions.ts`               | Region list for the picker                                           |
 | `src/lib/server/log-groups.ts`            | `DescribeLogGroups` pagination                                       |
 | `src/lib/server/tail.ts`                  | Polling tail engine: cursor, de-duplication, backoff, abort          |
+| `src/lib/server/archive.ts`               | Local DuckDB archive: lazy driver, writes, reads, degradation        |
+| `src/lib/server/archive-sql.ts`           | Archive schema, statements and row mapping (no driver import)        |
+| `src/lib/server/archive-tail.ts`          | Replays the archive as the same batches the tailer yields            |
+| `src/lib/server/source.ts`                | The `source` parameter shared by both list and stream endpoints      |
+| `src/lib/server/level-filter.ts`          | The `level` parameter, and tagging live events with their level      |
 | `src/lib/server/filter.ts`                | Duration parsing (`5m`, `2h`, epoch ms, ISO 8601)                    |
 | `src/lib/server/sse.ts`                   | Server-sent event framing                                            |
 | `src/routes/api/*`                        | JSON + SSE endpoints                                                 |
+| `src/routes/api/archive/+server.ts`       | `GET /api/archive`: what the local archive holds                     |
 | `src/lib/components/*`                    | UI building blocks                                                   |
-| `src/lib/log-buffer.ts`                   | Client-side ring buffer + text filter                                |
+| `src/lib/log-buffer.ts`                   | Client-side ring buffer, text filter and level detection             |
 | `src/lib/log-format.ts`                   | JSON detection, pretty-printing and tokenizing                       |
 | `src/lib/resize.ts`                       | Pure resize math and `localStorage` preference keys                  |
 | `src/lib/time-range.ts`                   | Presets, window formatting and datetime-local conversions            |
@@ -96,15 +107,17 @@ credentials work at all and the ARN says whose they are. The CLI uses it before 
 }
 ```
 
-### `GET /api/log-groups?region=<region>&prefix=<prefix>&limit=<n>`
+### `GET /api/log-groups?region=<region>&prefix=<prefix>&limit=<n>&source=<source>`
 
 `region` is optional: without it the request uses the server's effective region (see
-[Region resolution](#region-resolution)).
+[Region resolution](#region-resolution)). `source` accepts `cloudwatch` (the default) or `archive`;
+the archive form is described under [Reading the archive](#reading-the-archive-sourcearchive).
 
 ```json
 {
 	"region": "us-east-1",
 	"endpoint": null,
+	"source": "cloudwatch",
 	"groups": [{ "name": "/aws/lambda/checkout", "arn": "arn:...", "storedBytes": 1024 }]
 }
 ```
@@ -127,6 +140,11 @@ Query parameters:
 | `startTime`     | no       | Start point: epoch ms, ISO 8601, or duration (`15m`, `2h`)             |
 | `lookback`      | no       | Duration used when `startTime` is absent (default `5m`)                |
 | `poll`          | no       | Poll interval in ms, clamped to 250..15000 (default 1000)              |
+| `source`        | no       | `cloudwatch` (default) or `archive`; see the archive section below     |
+| `search`        | no       | Archive only: case-insensitive substring match on the message          |
+| `pageSize`      | no       | Archive only: events per read, 1..5000 (default 1000)                  |
+| `max`           | no       | Archive only: event cap for the request, 1..100000 (default 10000)     |
+| `level`         | no       | Archive only: `error`, `warn`, `info`, `debug`, comma separated        |
 
 A historic request sets `endTime` on every `FilterLogEvents` call and ends by itself: with
 `window-complete` once the window is exhausted (two empty polls, since ingestion can lag), with
@@ -145,6 +163,116 @@ Events:
 
 The stream stops when the browser disconnects (`request.signal` aborts).
 
+The `ready` payload also carries `source`, so a client always knows which feed it is reading.
+
+## Reading the archive (`source=archive`)
+
+`GET /api/stream?source=archive&region=<region>&group=<group>` replays events from the local DuckDB
+archive instead of calling CloudWatch Logs. It needs **no credentials and no client**: the route
+resolves the region from the `region` parameter (`AWS_REGION`/`AWS_DEFAULT_REGION` also count) and
+refuses the request with code `missing-region-param` when there is none, because archived rows are
+stored per region.
+
+- The archive has no live mode. `mode` defaults to `historic`; an explicit `mode=live` is rejected with
+  `invalid-mode`.
+- `range`, `from` and `to` are the same windows as for CloudWatch, without the 14-day clamp.
+- `search` is a case-insensitive substring match on the archived message, with `%` and `_` escaped. It
+  is **not** a CloudWatch filter pattern; `filterPattern` is ignored for this source.
+- `level` keeps only rows whose stored level is one of the levels asked for. Rows stored as `NULL`
+  (nothing was detected) are left out, because asking for `error` is a request for known errors.
+  `level` is rejected on `source=cloudwatch` with code `invalid-level`: CloudWatch has no level field,
+  so use `filterPattern` there. The UI filters levels client-side instead, which keeps one control
+  working for both sources.
+- Events are read in pages (keyset paging on `(timestamp_ms, seq)`, so equal timestamps cannot repeat
+  or skip a row) and end with `window-complete` or `event-limit`, exactly like a historic CloudWatch
+  scan. `pageSize` (default 1000, clamped to 1..5000) sets how many rows one statement reads and `max`
+  (default 10 000, clamped to 1..100000) caps the request; an unparsable value falls back to the
+  default instead of failing the stream.
+- An archive that is off (`WATCH_STREAM_ARCHIVE=off`), missing its driver or locked by another process
+  streams a single `error` frame with code `archive-unavailable` and then `end`.
+
+`GET /api/log-groups?source=archive&region=<region>` lists what the archive holds for that region
+without contacting AWS. Each group carries `archivedEvents`, `archivedOldest` and `archivedNewest`;
+`endpoint` is `null` and `source` is `archive`.
+
+### `GET /api/archive`
+
+Reports the file, its size and its contents. This endpoint never fails: an archive that is off, broken
+or locked answers `200` with `available: false` and the reason, so the UI can hide the archive view
+instead of showing an error.
+
+```json
+{
+	"path": "/home/you/.local/share/watch-tail/archive.duckdb",
+	"available": true,
+	"error": null,
+	"bytes": 4096,
+	"rows": 12,
+	"groups": 3,
+	"regions": 2,
+	"oldest": 1738368000000,
+	"newest": 1738368180000
+}
+```
+
+### Archive schema
+
+One table holds every event the app has streamed, plus one unique index that makes a repeated scan
+idempotent:
+
+```sql
+CREATE TABLE log_events (
+	region            VARCHAR NOT NULL,
+	log_group         VARCHAR NOT NULL,
+	log_stream        VARCHAR,
+	event_key         VARCHAR NOT NULL,   -- event id, or a hash of (timestamp, stream, message)
+	event_id          VARCHAR,
+	timestamp_ms      BIGINT  NOT NULL,
+	ingestion_time_ms BIGINT,
+	message           VARCHAR NOT NULL,
+	level             VARCHAR,           -- error | warn | info | debug, or NULL
+	level_source      VARCHAR,           -- 'json' when the payload declared it, 'text' when matched
+	seq               BIGINT  NOT NULL DEFAULT nextval('log_events_seq'),
+	archived_at       TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX log_events_unique ON log_events (region, log_group, event_key);
+CREATE INDEX log_events_time ON log_events (region, log_group, timestamp_ms);
+```
+
+`level` and `level_source` are the one inferred pair of columns. CloudWatch has no level field, so the
+server detects it once, on the way in, with `detectLevelWithSource` in `src/lib/log-buffer.ts`:
+
+- a level the payload declares (`level`, `severity`, `lvl`, `logLevel`, `log_level`) wins, because it is
+  a statement of fact - `{"level":"info","msg":"retry after error count 0"}` is `info`, not `error`;
+- otherwise the text heuristic runs, and `level_source` is `text`;
+- otherwise both columns are `NULL`. "No level found" is deliberately not stored as `info`: a
+  stack-trace continuation line has no severity, and the database should not claim it does.
+
+Declared values are normalised onto `error | warn | info | debug` (`fatal`, `critical`, `panic` and
+friends become `error`; `trace` and `verbose` become `debug`), and Bunyan/pino numbers 10/20/30/40/50/60
+are mapped too. An unknown number - `{"level":0}` means different things in different loggers - is not
+guessed at; it falls through to the text heuristic.
+
+The same detection runs for a live stream, so the `level` the UI colours and the `level` the database
+stores cannot drift apart, and an event replayed from the archive keeps the level that was stored
+rather than being guessed again.
+
+Writes go through `INSERT OR IGNORE` in chunks of 500 rows, so re-scanning a window that is already
+archived changes nothing. A file written before these columns existed is migrated in place with
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`; its older rows keep `NULL` levels. `seq` orders events by arrival and is what makes keyset paging stable when
+thousands of events share a millisecond; `event_key` is the CloudWatch event id when there is one, and
+a SHA-256 of timestamp, stream and message when there is not (floci and LocalStack omit ids), which
+keeps those events de-duplicable too.
+
+Writing costs roughly 15-23 ms per 500-row chunk (about 30-45 ms per 1000 events) with this schema, so
+it stays well behind the polling loop; the fixed cost of binding 4000 parameters dominates, and
+`INSERT OR IGNORE` is not meaningfully slower than a plain `INSERT`. The Appender API cannot be used
+here at all, because `seq` has a `nextval()` default that the appender refuses to fill.
+
+The archive is one DuckDB file with a single writer: the server process holds the lock, statements are
+serialised through an internal queue, and a failure (a full disk, a locked file) is recorded and
+reported by `/api/archive` rather than interrupting a stream.
+
 ## Region resolution
 
 The region is resolved in this order:
@@ -162,22 +290,25 @@ never sent to the SDK.
 
 ## Error codes
 
-| Code                  | Status | Meaning                                                      |
-| --------------------- | ------ | ------------------------------------------------------------ |
-| `invalid-region`      | 400    | `region` param is not a plausible region code                |
-| `invalid-limit`       | 400    | `limit` param is not an integer in 1..1000                   |
-| `invalid-mode`        | 400    | `mode` is neither `live` nor `historic`                      |
-| `invalid-range`       | 400    | `range` is not one of the offered presets                    |
-| `invalid-time`        | 400    | `from`/`to` could not be parsed                              |
-| `invalid-window`      | 400    | Window is missing a bound, inverted, or older than 14 days   |
-| `missing-region`      | 502    | No region could be resolved from the parameter or AWS config |
-| `missing-credentials` | 502    | No credentials could be resolved for a real AWS endpoint     |
-| `access-denied`       | 502    | CloudWatch Logs refused the call                             |
-| `not-found`           | 502    | The log group does not exist                                 |
-| `throttled`           | 502    | CloudWatch Logs is rate limiting                             |
-| `unreachable`         | 502    | Endpoint/DNS/connection failure                              |
-| `aborted`             | 499    | The client closed the request before CloudWatch replied      |
-| `unknown`             | 502    | Anything else                                                |
+| Code                   | Status | Meaning                                                            |
+| ---------------------- | ------ | ------------------------------------------------------------------ |
+| `invalid-region`       | 400    | `region` param is not a plausible region code                      |
+| `invalid-limit`        | 400    | `limit` param is not an integer in 1..1000                         |
+| `invalid-mode`         | 400    | `mode` is neither `live` nor `historic`                            |
+| `invalid-range`        | 400    | `range` is not one of the offered presets                          |
+| `invalid-time`         | 400    | `from`/`to` could not be parsed                                    |
+| `invalid-window`       | 400    | Window is missing a bound, inverted, or older than 14 days         |
+| `missing-region`       | 502    | No region could be resolved from the parameter or AWS config       |
+| `invalid-source`       | 400    | `source` is neither `cloudwatch` nor `archive`                     |
+| `invalid-level`        | 400    | `level` is not a known level, or was used with `source=cloudwatch` |
+| `missing-region-param` | 400    | `source=archive` without a region (archived rows are per region)   |
+| `missing-credentials`  | 502    | No credentials could be resolved for a real AWS endpoint           |
+| `access-denied`        | 502    | CloudWatch Logs refused the call                                   |
+| `not-found`            | 502    | The log group does not exist                                       |
+| `throttled`            | 502    | CloudWatch Logs is rate limiting                                   |
+| `unreachable`          | 502    | Endpoint/DNS/connection failure                                    |
+| `aborted`              | 499    | The client closed the request before CloudWatch replied            |
+| `unknown`              | 502    | Anything else                                                      |
 
 ## Configuration
 
@@ -192,6 +323,17 @@ run; blank values are ignored by the SDK and by `normalize()`. It also resolves 
 starting (`--region`, then the shell's `AWS_REGION`/`AWS_DEFAULT_REGION`, then the profile's `region`
 in `~/.aws/config`) because the SDK rejects an empty `AWS_REGION` string.
 
+`WATCH_STREAM_ARCHIVE` and `WATCH_STREAM_ARCHIVE_DB` are also set by the CLI (`--no-archive` and
+`--db`), and a blank value means "unset" for both. Inside a test process (`VITEST` or
+`NODE_ENV=test`) the archive is off unless a test names a database explicitly, so a test run can never
+append to the archive of the machine it runs on.
+
+The archive itself is documented under [Reading the archive](#reading-the-archive-sourcearchive). Its
+driver, `@duckdb/node-api`, is an **optional dependency**: it is imported lazily, so a platform without
+a prebuilt native binding (or an install made with `--no-optional`) still runs the app, without
+history. The import specifier is held in a variable on purpose, so Vite leaves it external and Node
+resolves it at run time - bundling the driver fails (`duckdb.node` is not UTF-8).
+
 SvelteKit exposes `.env` values through `$env/dynamic/private`, but the AWS SDK reads
 `process.env` directly. `src/lib/server/env.ts` therefore loads `.env.local` into the process
 once at startup (existing variables win, `node --env-file` semantics). `pnpm floci:up` writes
@@ -204,3 +346,5 @@ that file with the floci endpoint and its throwaway credentials.
 | `AWS_ENDPOINT_URL`                  | Global endpoint override; set to `http://localhost:4566` for floci |
 | `WATCH_STREAM_REGIONS`              | Narrow the picker; unset offers every CloudWatch Logs region       |
 | `WATCH_STREAM_LIMIT`                | Default page size for `describe-log-groups`                        |
+| `WATCH_STREAM_ARCHIVE`              | `off` disables the local history archive                           |
+| `WATCH_STREAM_ARCHIVE_DB`           | Database file for local history (default: the platform data dir)   |

@@ -31,6 +31,39 @@ vi.mock('$lib/server/aws', async (importOriginal) => {
 	};
 });
 
+/** Archive double: the route must never touch a real DuckDB file from a test. */
+const archiveState = {
+	available: true,
+	error: null as string | null,
+	pages: [] as { events: unknown[]; last: { timestamp: number; seq: number } | null }[],
+	requests: [] as Record<string, unknown>[],
+	records: [] as { region: string; group: string; events: unknown[] }[],
+};
+
+function resetArchive(): void {
+	archiveState.available = true;
+	archiveState.error = null;
+	archiveState.pages = [];
+	archiveState.requests = [];
+	archiveState.records = [];
+}
+
+vi.mock('$lib/server/archive', () => ({
+	getArchive: async () => ({
+		path: '/tmp/watch-tail-test/archive.duckdb',
+		available: archiveState.available,
+		error: archiveState.error,
+		async page(request: Record<string, unknown>) {
+			archiveState.requests.push(request);
+			return archiveState.pages.shift() ?? { events: [], last: null };
+		},
+		async record(region: string, group: string, events: unknown[]) {
+			archiveState.records.push({ region, group, events });
+			return events.length;
+		},
+	}),
+}));
+
 type Frame = { event: string; data: unknown };
 type PollResult = { events: FilteredLogEvent[] } | Error;
 
@@ -141,6 +174,7 @@ describe('GET /api/stream', () => {
 		mocks.region.mockResolvedValue('us-west-1');
 		mocks.destroy.mockReset();
 		mocks.failCreate.current = false;
+		resetArchive();
 		queueSend([{ events: [] }]);
 	});
 
@@ -186,6 +220,7 @@ describe('GET /api/stream', () => {
 			region: 'us-west-2',
 			logGroupName: '/aws/lambda/demo',
 			endpoint: null,
+			source: 'cloudwatch',
 			startTime: expect.any(Number),
 			endTime: null,
 			mode: 'live',
@@ -200,6 +235,8 @@ describe('GET /api/stream', () => {
 					message: 'hello',
 					streamName: 'stream-e1',
 					ingestionTime: 1001,
+					// A live event carries no level of its own: the server detected none.
+					level: null,
 				},
 			],
 		});
@@ -278,6 +315,7 @@ describe('GET /api/stream', () => {
 				region: 'us-east-1',
 				logGroupName: 'demo',
 				endpoint: 'http://localhost:4566',
+				source: 'cloudwatch',
 				startTime: expect.any(Number),
 				endTime: null,
 				mode: 'live',
@@ -294,6 +332,7 @@ describe('GET /api/stream', () => {
 			region: 'eu-west-1',
 			logGroupName: 'demo',
 			endpoint: null,
+			source: 'cloudwatch',
 			startTime,
 			endTime: null,
 			mode: 'live',
@@ -532,5 +571,324 @@ describe('historic windows', () => {
 		const { ready } = await readHistoric({ group: '/aws/lambda/demo', lookback: '30m' });
 		expect(ready.mode).toBe('live');
 		expect(ready.endTime).toBeNull();
+	});
+});
+
+describe('GET /api/stream source=archive', () => {
+	beforeEach(() => {
+		envState.current = { AWS_REGION: 'eu-west-1' };
+		mocks.send.mockReset();
+		resetArchive();
+		queueSend([{ events: [] }]);
+	});
+
+	test('replays archived events and never calls CloudWatch', async () => {
+		archiveState.pages = [
+			{
+				events: [{ id: 'a1', timestamp: 1000, message: 'from the archive' }],
+				last: { timestamp: 1000, seq: 1 },
+			},
+		];
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{ group: '/aws/lambda/demo', region: 'af-south-1', source: 'archive' },
+				controller.signal,
+			),
+		);
+		expect(response.status).toBe(200);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+
+		expect(mocks.send).not.toHaveBeenCalled();
+		expect(reader.frames.map((frame) => frame.event)).toEqual(['ready', 'log', 'end']);
+		expect(reader.frames[0]?.data).toMatchObject({
+			source: 'archive',
+			region: 'af-south-1',
+			logGroupName: '/aws/lambda/demo',
+			endpoint: null,
+			mode: 'historic',
+		});
+		expect(reader.frames[1]?.data).toEqual({
+			events: [{ id: 'a1', timestamp: 1000, message: 'from the archive' }],
+		});
+		expect(reader.frames[2]?.data).toEqual({ reason: 'window-complete' });
+		// Reading the archive must not write to it.
+		expect(archiveState.records).toEqual([]);
+	});
+
+	test('defaults to historic and passes the window and the search term', async () => {
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{
+					group: '/aws/lambda/demo',
+					region: 'af-south-1',
+					source: 'archive',
+					range: '1h',
+					search: 'boom',
+				},
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+
+		const request = archiveState.requests[0] as {
+			region: string;
+			logGroup: string;
+			search: string | null;
+		};
+		expect(request.region).toBe('af-south-1');
+		expect(request.logGroup).toBe('/aws/lambda/demo');
+		expect(request.search).toBe('boom');
+		expect(reader.frames[0]?.data).toMatchObject({ preset: '1h' });
+	});
+
+	test('refuses a live request against the archive', async () => {
+		const response = await GET(
+			requestEvent({
+				group: '/aws/lambda/demo',
+				region: 'af-south-1',
+				source: 'archive',
+				mode: 'live',
+			}),
+		);
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ code: 'invalid-mode' });
+		expect(archiveState.requests).toEqual([]);
+	});
+
+	test('requires a region, because archived rows are stored per region', async () => {
+		envState.current = {};
+		const response = await GET(requestEvent({ group: '/aws/lambda/demo', source: 'archive' }));
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ code: 'missing-region-param' });
+	});
+
+	test('rejects an unknown source', async () => {
+		const response = await GET(requestEvent({ group: '/aws/lambda/demo', source: 'duckdb' }));
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ code: 'invalid-source' });
+	});
+
+	test('reports an unavailable archive as a stream error', async () => {
+		archiveState.available = false;
+		archiveState.error = 'Cannot find module @duckdb/node-api';
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{ group: '/aws/lambda/demo', region: 'af-south-1', source: 'archive' },
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+
+		expect(reader.frames.map((frame) => frame.event)).toEqual(['ready', 'error', 'end']);
+		expect(reader.frames[1]?.data).toMatchObject({
+			code: 'archive-unavailable',
+			message: expect.stringContaining('@duckdb/node-api'),
+		});
+		expect(mocks.send).not.toHaveBeenCalled();
+	});
+
+	test('detects the level of live events before sending them', async () => {
+		queueSend([
+			{
+				events: [
+					event('e1', 1000, '{"level":"warn","msg":"slow upstream"}'),
+					event('e2', 1001, 'ERROR upstream 503'),
+					event('e3', 1002, '\tat Handler.java:41'),
+				],
+			},
+		]);
+		const controller = new AbortController();
+		const response = await GET(requestEvent({ group: '/aws/lambda/demo' }, controller.signal));
+		const reader = startReading(response);
+		await withTimeout(
+			waitFor(() => reader.frames.length > 1),
+			2000,
+			'log frame',
+		);
+		controller.abort();
+		await withTimeout(reader.done, 2000, 'stream end');
+
+		const payload = reader.frames[1]?.data as { events: { id: string; level: string | null }[] };
+		expect(payload.events.map((entry) => [entry.id, entry.level])).toEqual([
+			['e1', 'warn'],
+			['e2', 'error'],
+			['e3', null],
+		]);
+		// The archive stores what the client was shown.
+		const archived = archiveState.records[0]?.events as { level?: string | null }[] | undefined;
+		expect(archived?.map((entry) => entry.level)).toEqual(['warn', 'error', null]);
+	});
+
+	test('keeps the level stored in the archive when replaying it', async () => {
+		archiveState.pages = [
+			{
+				events: [
+					{
+						id: 'a1',
+						timestamp: 1000,
+						message: 'ERROR looking, but stored as debug',
+						level: 'debug',
+					},
+					{ id: 'a2', timestamp: 1001, message: '{"level":"warn"}', level: 'warn' },
+					{ id: 'a3', timestamp: 1002, message: 'no signal here', level: null },
+				],
+				last: { timestamp: 1002, seq: 3 },
+			},
+		];
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{ group: '/aws/lambda/demo', region: 'af-south-1', source: 'archive' },
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+
+		const payload = reader.frames[1]?.data as { events: { id: string; level: string | null }[] };
+		expect(payload.events.map((entry) => entry.level)).toEqual(['debug', 'warn', null]);
+	});
+
+	test('passes the level filter to the archive reader', async () => {
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{ group: '/aws/lambda/demo', region: 'af-south-1', source: 'archive', level: 'error,warn' },
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+		expect(archiveState.requests[0]).toMatchObject({ levels: ['error', 'warn'] });
+	});
+
+	test('rejects an unknown level, and rejects level on CloudWatch', async () => {
+		const bad = await GET(
+			requestEvent({
+				group: '/aws/lambda/demo',
+				source: 'archive',
+				region: 'af-south-1',
+				level: 'shouty',
+			}),
+		);
+		expect(bad.status).toBe(400);
+		expect(await bad.json()).toMatchObject({ code: 'invalid-level' });
+
+		const misplaced = await GET(requestEvent({ group: '/aws/lambda/demo', level: 'error' }));
+		expect(misplaced.status).toBe(400);
+		const body = (await misplaced.json()) as { code: string; error: string };
+		expect(body.code).toBe('invalid-level');
+		expect(body.error).toContain('filterPattern');
+		expect(archiveState.requests).toEqual([]);
+		expect(archiveState.records).toEqual([]);
+	});
+
+	test('treats a blank level as no filter', async () => {
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{ group: '/aws/lambda/demo', region: 'af-south-1', source: 'archive', level: ' , ' },
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+		expect(archiveState.requests[0]).toMatchObject({ levels: null });
+	});
+
+	test('archives every batch of a CloudWatch stream', async () => {
+		queueSend([{ events: [event('e1', 1000, 'first'), event('e2', 1001, 'second')] }]);
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent({ group: '/aws/lambda/demo', region: 'af-south-1' }, controller.signal),
+		);
+		const reader = startReading(response);
+		await withTimeout(
+			waitFor(() => archiveState.records.length > 0),
+			2000,
+			'archive write',
+		);
+		controller.abort();
+		await withTimeout(reader.done, 2000, 'stream end');
+
+		expect(archiveState.records).toHaveLength(1);
+		expect(archiveState.records[0]?.region).toBe('af-south-1');
+		expect(archiveState.records[0]?.group).toBe('/aws/lambda/demo');
+		expect(archiveState.records[0]?.events).toHaveLength(2);
+		expect(archiveState.requests).toEqual([]);
+	});
+
+	test('passes pageSize and max through to the archive reader', async () => {
+		const controller = new AbortController();
+		const response = await GET(
+			requestEvent(
+				{
+					group: '/aws/lambda/demo',
+					region: 'af-south-1',
+					source: 'archive',
+					pageSize: '250',
+					max: '4000',
+				},
+				controller.signal,
+			),
+		);
+		const reader = startReading(response);
+		await withTimeout(reader.done, 2000, 'archive stream end');
+		expect(archiveState.requests[0]).toMatchObject({ limit: 250 });
+	});
+
+	test('clamps an extreme page size, the minimum, and falls back on nonsense', async () => {
+		const huge = new AbortController();
+		const first = startReading(
+			await GET(
+				requestEvent(
+					{
+						group: '/aws/lambda/demo',
+						region: 'af-south-1',
+						source: 'archive',
+						pageSize: '999999',
+					},
+					huge.signal,
+				),
+			),
+		);
+		await withTimeout(first.done, 2000, 'archive stream end');
+		expect(archiveState.requests[0]).toMatchObject({ limit: 5000 });
+
+		resetArchive();
+		const negative = startReading(
+			await GET(
+				requestEvent({
+					group: '/aws/lambda/demo',
+					region: 'af-south-1',
+					source: 'archive',
+					pageSize: '-5',
+				}),
+			),
+		);
+		await withTimeout(negative.done, 2000, 'archive stream end');
+		expect(archiveState.requests[0]).toMatchObject({ limit: 1 });
+
+		// An unparsable value is not an error: the archive default applies.
+		resetArchive();
+		const nonsense = startReading(
+			await GET(
+				requestEvent({
+					group: '/aws/lambda/demo',
+					region: 'af-south-1',
+					source: 'archive',
+					pageSize: 'wide',
+					max: 'lots',
+				}),
+			),
+		);
+		await withTimeout(nonsense.done, 2000, 'archive stream end');
+		expect(archiveState.requests[0]).toMatchObject({ limit: 1000 });
 	});
 });

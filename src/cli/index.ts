@@ -42,11 +42,14 @@ import {
 	waitForHealth,
 } from './server.ts';
 import {
+	describeArchive,
 	isHeadless,
 	probeCredentials as probeCredentialsDefault,
+	readArchive as readArchiveDefault,
 	readIdentity as readIdentityDefault,
 	runLogin as runLoginDefault,
 	shortIdentity,
+	type ArchiveProbe,
 	type CredentialProbe,
 	type IdentityProbe,
 } from './preflight.ts';
@@ -79,6 +82,8 @@ export type CliIo = {
 	runLogin: (command: string[]) => Promise<number>;
 	/** Asks the app who the resolved credentials belong to (`sts:GetCallerIdentity`). */
 	readIdentity: (input: { baseUrl: string; region: string | null }) => Promise<IdentityProbe>;
+	/** Asks the app what the local history archive holds. */
+	readArchive: (input: { baseUrl: string }) => Promise<ArchiveProbe>;
 	/** Health poller. */
 	waitForHealth: typeof waitForHealth;
 	/** Used for tests that must not spawn a server. */
@@ -146,6 +151,7 @@ function defaultIo(): CliIo {
 		probeCredentials: (input) => probeCredentialsDefault(input),
 		runLogin: (command) => runLoginDefault(command),
 		readIdentity: (input) => readIdentityDefault(input),
+		readArchive: (input) => readArchiveDefault(input),
 		waitForHealth,
 		startServerImpl: startServer,
 		spawnImpl: spawn,
@@ -341,6 +347,7 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 		region,
 		endpoint: options.endpoint,
 		clearStaticKeys: options.profile === null && profile !== null,
+		archive: { enabled: options.archive, path: options.db },
 	});
 
 	if (options.print) {
@@ -392,6 +399,20 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 	}
 	ui.stopSpinner(`listening on ${url}`);
 
+	// Report where history is kept before the AWS check: it is the one thing the
+	// UI can offer even when credentials are not usable yet.
+	if (!options.archive) {
+		ui.info('local history off (--no-archive)');
+	} else {
+		const archive = await io.readArchive({ baseUrl: url });
+		if (archive.ok) {
+			if (archive.status.available) ui.info(describeArchive(archive.status));
+			else ui.warn(describeArchive(archive.status));
+		} else {
+			ui.warn(`could not read the local history status: ${archive.message}`);
+		}
+	}
+
 	// Before sending anyone to a UI that cannot load logs, check that AWS will
 	// actually answer, and offer the login that fixes it.
 	const assessment = await assessCredentials({
@@ -431,6 +452,7 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 					profile: assessment.chosen,
 					region: activeRegion,
 					endpoint: null,
+					archive: { enabled: options.archive, path: options.db },
 				}),
 				port: options.port,
 				host: options.host,

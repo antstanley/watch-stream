@@ -37,6 +37,10 @@ export type CliOptions = {
 	version: boolean;
 	/** Extra logging. */
 	verbose: boolean;
+	/** Keep the local history archive on (default). `--no-archive` turns it off. */
+	archive: boolean;
+	/** Database file for the local history archive, or `null` for the default. */
+	db: string | null;
 	/** `complete <shell>` / `complete -- <words>` payload, or `null`. */
 	complete: string[] | null;
 };
@@ -63,6 +67,9 @@ const KNOWN_FLAGS = new Set([
 	'version',
 	'v',
 	'verbose',
+	'archive',
+	'no-archive',
+	'db',
 ]);
 
 function asString(value: unknown): string | null {
@@ -98,8 +105,19 @@ export function parseCliArgs(argv: string[]): ParseCliResult {
 	try {
 		parsed = parse(words, {
 			alias: { p: 'profile', r: 'region', h: 'help', v: 'version' },
-			boolean: ['floci', 'open', 'no-open', 'print', 'list', 'help', 'version', 'verbose'],
-			string: ['profile', 'region', 'port', 'host', 'endpoint'],
+			boolean: [
+				'floci',
+				'open',
+				'no-open',
+				'print',
+				'list',
+				'help',
+				'version',
+				'verbose',
+				'archive',
+				'no-archive',
+			],
+			string: ['profile', 'region', 'port', 'host', 'endpoint', 'db'],
 			default: { open: true },
 		}) as Record<string, unknown>;
 	} catch (error) {
@@ -141,6 +159,8 @@ export function parseCliArgs(argv: string[]): ParseCliResult {
 			help: asFlag(parsed.help),
 			version: asFlag(parsed.version),
 			verbose: asFlag(parsed.verbose),
+			archive: !asFlag(parsed['no-archive']) && parsed.archive !== false,
+			db: asString(parsed.db),
 			complete: null,
 		},
 	};
@@ -160,6 +180,8 @@ export function defaults(): CliOptions {
 		help: false,
 		version: false,
 		verbose: false,
+		archive: true,
+		db: null,
 		complete: null,
 	};
 }
@@ -195,6 +217,8 @@ Options
       --print            Print the environment that would be used, then exit
       --list             List the AWS profiles found on disk, then exit
       --verbose          Log the server's own output
+      --db <path>        Database file for local history (default: app data dir)
+      --no-archive       Do not keep a local history archive
   -h, --help             Show this help
   -v, --version          Show the version
 
@@ -206,6 +230,12 @@ Examples
   npx watch-tail
   npx watch-tail --profile my-profile --region eu-west-1
   npx watch-tail --floci --port 4600 --no-open
+  npx watch-tail --db ./logs.duckdb      (history in a file you choose)
+
+Everything the app streams is also archived to a local DuckDB file, so the UI can
+browse history later without calling AWS. Use --no-archive to switch that off, or
+--db to keep the archive somewhere else. The database needs the optional DuckDB
+driver: when it is missing, the app runs exactly as before, without history.
 
 The app streams whatever your ambient AWS credentials can read. Credentials are
 resolved by the AWS SDK (SSO, shared config, environment, instance role); the CLI

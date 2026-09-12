@@ -18,6 +18,7 @@ import type {
 	StreamLogPayload,
 	StreamPingPayload,
 	StreamReadyPayload,
+	StreamSource,
 	StreamState,
 } from './types';
 
@@ -53,6 +54,8 @@ export type TimerHandle = ReturnType<typeof setTimeout>;
 export type StreamTarget = {
 	region: string;
 	group: string;
+	/** Defaults to `cloudwatch`; `archive` reads the local DuckDB file instead. */
+	source?: StreamSource;
 	/** `live` (default) tails new events; `historic` scans a fixed window. */
 	mode?: LogMode;
 	/** Preset window for historic mode, for example `24h`. */
@@ -98,6 +101,8 @@ export function buildStreamUrl(target: StreamTarget, base = ''): string {
 	const search = new URLSearchParams();
 	search.set('region', target.region);
 	search.set('group', target.group);
+	// CloudWatch is the server default, so its URL stays exactly as it always was.
+	if (target.source === 'archive') search.set('source', 'archive');
 	if (target.filterPattern) search.set('filterPattern', target.filterPattern);
 	if (target.mode === 'historic') {
 		search.set('mode', 'historic');
@@ -127,7 +132,7 @@ function parsePayload<T>(data: string): T | null {
 }
 
 /**
- * Live view over one CloudWatch log group.
+ * View over one log group: the live CloudWatch stream, or the local archive replay.
  *
  * Pause policy: pausing keeps the connection open and keeps receiving events; those events are
  * held in a pending buffer and flushed into the visible buffer on resume.

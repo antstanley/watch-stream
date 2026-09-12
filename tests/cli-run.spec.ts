@@ -74,6 +74,8 @@ function harness(overrides: Partial<CliIo> = {}): Harness {
 		runLogin: (command) => (overrides.runLogin ?? (async () => 0))(command),
 		readIdentity: (input) =>
 			(overrides.readIdentity ?? (async () => ({ ok: false, message: 'unavailable' })))(input),
+		readArchive: (input) =>
+			(overrides.readArchive ?? (async () => ({ ok: false, message: 'unavailable' })))(input),
 		waitForHealth: async () => true,
 		startServerImpl: ((input) => {
 			started.push({ env: input.env, port: input.port, host: input.host });
@@ -610,5 +612,99 @@ describe('run: the chosen profile may already work', () => {
 		expect(h.logins).toEqual([['sso', 'login', '--profile', 'beyond-mzansi']]);
 		expect(h.ui.asked.join(' ')).toContain('aws sso login --profile beyond-mzansi');
 		expect(h.ui.lines.join('\n')).not.toContain('already works');
+	});
+});
+
+/** Status payload double, at module scope so it is not rebuilt per test. */
+const status = (overrides: Record<string, unknown> = {}) => ({
+	path: '/tmp/archive.duckdb',
+	available: true,
+	error: null,
+	bytes: 1024,
+	rows: 0,
+	groups: 0,
+	regions: 0,
+	oldest: null,
+	newest: null,
+	...overrides,
+});
+
+describe('run: the local history archive', () => {
+	it('tells the user where history is kept and how much there is', async () => {
+		const h = harness({
+			readArchive: async () => ({ ok: true, status: status({ rows: 1234 }) as never }),
+		});
+		expect(await run(['--no-open'], h.io)).toBe(0);
+		const lines = h.ui.lines.join('\n');
+		expect(lines).toContain('history 1,234 events at /tmp/archive.duckdb');
+	});
+
+	it('reports an empty archive without sounding broken', async () => {
+		const h = harness({ readArchive: async () => ({ ok: true, status: status() as never }) });
+		await run(['--no-open'], h.io);
+		expect(h.ui.lines.join('\n')).toContain('no events yet');
+	});
+
+	it('warns when the archive is unavailable', async () => {
+		const h = harness({
+			readArchive: async () => ({
+				ok: true,
+				status: status({ available: false, error: 'Cannot find module @duckdb/node-api' }) as never,
+			}),
+		});
+		await run(['--no-open'], h.io);
+		expect(h.ui.lines.join('\n')).toContain(
+			'warn: local history unavailable: Cannot find module @duckdb/node-api',
+		);
+	});
+
+	it('warns when the app does not answer the archive question', async () => {
+		const h = harness({
+			readArchive: async () => ({ ok: false, message: 'ECONNREFUSED' }),
+		});
+		await run(['--no-open'], h.io);
+		expect(h.ui.lines.join('\n')).toContain(
+			'warn: could not read the local history status: ECONNREFUSED',
+		);
+	});
+
+	it('does not ask about the archive with --no-archive', async () => {
+		const asked: string[] = [];
+		const h = harness({
+			readArchive: async (input) => {
+				asked.push(input.baseUrl);
+				return { ok: true, status: status() as never };
+			},
+		});
+		await run(['--no-open', '--no-archive'], h.io);
+		expect(asked).toEqual([]);
+		expect(h.ui.lines.join('\n')).toContain('local history off (--no-archive)');
+	});
+
+	it('passes the history settings to the server', async () => {
+		const plain = harness();
+		await run(['--no-open'], plain.io);
+		expect(plain.started[0]?.env.WATCH_STREAM_ARCHIVE).toBe('');
+		expect(plain.started[0]?.env.WATCH_STREAM_ARCHIVE_DB).toBe('');
+
+		const custom = harness();
+		await run(['--no-open', '--db', '/tmp/mine.duckdb'], custom.io);
+		expect(custom.started[0]?.env.WATCH_STREAM_ARCHIVE_DB).toBe('/tmp/mine.duckdb');
+
+		const off = harness();
+		await run(['--no-open', '--no-archive'], off.io);
+		expect(off.started[0]?.env.WATCH_STREAM_ARCHIVE).toBe('off');
+	});
+
+	it('prints the history settings with --print so a run is reproducible', async () => {
+		const h = harness();
+		expect(await run(['--print', '--db', '/tmp/mine.duckdb'], h.io)).toBe(0);
+		const text = h.out.join('\n');
+		expect(text).toContain('WATCH_STREAM_ARCHIVE_DB=/tmp/mine.duckdb');
+		expect(text).toContain('WATCH_STREAM_ARCHIVE=');
+
+		const hm = harness();
+		await run(['--print', '--no-archive'], hm.io);
+		expect(hm.out.join('\n')).toContain('WATCH_STREAM_ARCHIVE=off');
 	});
 });

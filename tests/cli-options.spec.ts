@@ -154,3 +154,64 @@ describe('usageText', () => {
 		expect(text).toContain('watch-tail');
 	});
 });
+
+describe('parseCliArgs: local history flags', () => {
+	it('keeps the archive on with no flags', () => {
+		const parsed = parseCliArgs([]);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.options.archive).toBe(true);
+		expect(parsed.options.db).toBeNull();
+	});
+
+	it('accepts --db as a path', () => {
+		const parsed = parseCliArgs(['--db', '/tmp/logs.duckdb']);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.options.db).toBe('/tmp/logs.duckdb');
+		expect(parsed.options.archive).toBe(true);
+	});
+
+	it('accepts --db=value and trims it', () => {
+		const parsed = parseCliArgs(['--db= ./logs.duckdb ']);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.options.db).toBe('./logs.duckdb');
+	});
+
+	it('treats an empty --db as unset', () => {
+		const parsed = parseCliArgs(['--db', '  ']);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.options.db).toBeNull();
+	});
+
+	it('turns the archive off with --no-archive', () => {
+		const parsed = parseCliArgs(['--no-archive']);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.options.archive).toBe(false);
+	});
+
+	it('accepts --archive explicitly', () => {
+		const parsed = parseCliArgs(['--archive', '--db', '/tmp/a.duckdb']);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.options).toMatchObject({ archive: true, db: '/tmp/a.duckdb' });
+	});
+
+	it('defaults archive and db for the completion short-circuit', () => {
+		expect(defaults()).toMatchObject({ archive: true, db: null });
+		expect(parseCliArgs(['complete', '--', 'watch-tail', '--d'])).toMatchObject({
+			ok: true,
+			options: { archive: true, db: null },
+		});
+	});
+
+	it('documents the history flags in the usage text', () => {
+		const usage = usageText();
+		expect(usage).toContain('--db <path>');
+		expect(usage).toContain('--no-archive');
+		expect(usage).toContain('DuckDB');
+	});
+});

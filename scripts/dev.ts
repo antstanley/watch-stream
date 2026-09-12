@@ -217,6 +217,9 @@ function warnMissingProfile(profile: string): void {
 /** Options for {@link runChild}. */
 type RunOptions = { start: boolean; port: number | null };
 
+/** Development archive file, inside the repository and git-ignored. */
+const DEV_ARCHIVE_FILE = join(rootDir, '.watch-tail', 'archive.duckdb');
+
 /**
  * Starts the child with inherited stdio, forwards SIGINT/SIGTERM to it and
  * resolves with the exit code this launcher should use.
@@ -302,6 +305,10 @@ async function main(): Promise<void> {
 			? region
 			: resolveRunRegion({ region, profile, base: process.env, configText: readConfigText() });
 	const env = buildChildEnv({ base: process.env, profile, region: childRegion });
+	// Keep the history archive inside the repository during development, so
+	// `pnpm dev` and `pnpm dev:aws` never write to the data directory of whoever
+	// runs them. An explicit value in the environment still wins.
+	env.WATCH_STREAM_ARCHIVE_DB ??= DEV_ARCHIVE_FILE;
 
 	if (list) {
 		const names = readProfiles();

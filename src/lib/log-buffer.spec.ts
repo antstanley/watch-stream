@@ -1,14 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DEFAULT_CAPACITY,
+	LEVEL_KEYS,
 	LogRingBuffer,
 	LogStore,
 	detectLevel,
+	detectLevelWithSource,
+	effectiveLevel,
 	eventKey,
+	filterByLevel,
 	filterEvents,
+	isLogLevel,
 	levelColorClass,
+	levelFromDeclared,
 	matchesFilter,
+	matchesLevel,
 } from './log-buffer';
+import type { LogLevel } from './log-buffer';
 import type { LogEventDto } from './types';
 
 /** Builds a log event with a generated message. */
@@ -137,9 +145,22 @@ describe('detectLevel', () => {
 		expect(detectLevel('trace: entering handler')).toBe('debug');
 	});
 
-	it('defaults to info', () => {
-		expect(detectLevel('server started on port 3000')).toBe('info');
-		expect(detectLevel('the user warned us')).toBe('info');
+	it('returns null when the line carries no signal at all', () => {
+		// "No level found" is not the same claim as "the app said info", so the
+		// archive stores NULL for these lines and the viewer leaves them neutral.
+		expect(detectLevel('server started on port 3000')).toBeNull();
+		expect(detectLevel('the user warned us')).toBeNull();
+		expect(detectLevel('\tat com.example.Handler.invoke(Handler.java:41)')).toBeNull();
+		expect(detectLevel('')).toBeNull();
+	});
+
+	it('lets a declared level win over the words in the message', () => {
+		// The text says "error", the payload says info: the payload is a statement
+		// of fact, the text is a guess.
+		expect(detectLevel('{"level":"info","msg":"retry scheduled after error count 0"}')).toBe(
+			'info',
+		);
+		expect(detectLevel('{"level":"debug","msg":"no failures this cycle"}')).toBe('debug');
 	});
 
 	it('prefers error over debug when both appear', () => {
@@ -195,5 +216,131 @@ describe('eventKey', () => {
 	it('handles a missing id', () => {
 		const anonymous: LogEventDto = { id: null, timestamp: 5, message: 'x' };
 		expect(eventKey(anonymous, 2)).toBe('no-id:5:2');
+	});
+});
+
+describe('detectLevelWithSource', () => {
+	it('reports the payload as the source when the line declares a level', () => {
+		expect(detectLevelWithSource('{"level":"warn","msg":"slow"}')).toEqual({
+			level: 'warn',
+			source: 'json',
+		});
+		expect(detectLevelWithSource('2026-01-01 INFO {"severity":"warn"}')).toEqual({
+			level: 'warn',
+			source: 'json',
+		});
+	});
+
+	it('reports the text as the source when only a word was matched', () => {
+		expect(detectLevelWithSource('ERROR upstream 503')).toEqual({ level: 'error', source: 'text' });
+	});
+
+	it('reports nothing when there is no signal', () => {
+		expect(detectLevelWithSource('server started')).toEqual({ level: null, source: null });
+	});
+
+	it('checks every supported key in order', () => {
+		for (const key of LEVEL_KEYS) {
+			expect(detectLevelWithSource(`{"${key}":"error"}`)).toEqual({
+				level: 'error',
+				source: 'json',
+			});
+		}
+		expect(detectLevelWithSource('{"msg":"nothing declared"}')).toEqual({
+			level: null,
+			source: null,
+		});
+	});
+
+	it('normalises the level vocabulary onto the four known levels', () => {
+		expect(detectLevel('{"level":"TRACE"}')).toBe('debug');
+		expect(detectLevel('{"level":"Warning"}')).toBe('warn');
+		expect(detectLevel('{"level":"FATAL"}')).toBe('error');
+		expect(detectLevel('{"level":"critical"}')).toBe('error');
+		expect(detectLevel('{"level":"notice"}')).toBe('info');
+	});
+
+	it('maps bunyan/pino numbers and ignores unknown ones', () => {
+		expect(detectLevel('{"level":10,"msg":"trace"}')).toBe('debug');
+		expect(detectLevel('{"level":30,"msg":"ok"}')).toBe('info');
+		expect(detectLevel('{"level":40,"msg":"slow"}')).toBe('warn');
+		expect(detectLevel('{"level":50,"msg":"boom"}')).toBe('error');
+		expect(detectLevel('{"level":60,"msg":"fatal"}')).toBe('error');
+		// 0 and 4 mean different things in different loggers: do not guess.
+		expect(detectLevel('{"level":0,"msg":"opaque"}')).toBeNull();
+		expect(detectLevel('{"level":4}')).toBeNull();
+	});
+
+	it('falls through to the text when a declared value is unusable', () => {
+		expect(detectLevel('{"level":null}')).toBeNull();
+		expect(detectLevel('{"level":{}}')).toBeNull();
+		expect(detectLevel('{"level":"custom-thing","msg":"ok"}')).toBeNull();
+		// The value is not a level we know, but the line still says "error", so the
+		// text heuristic decides - it is a guess either way.
+		expect(detectLevelWithSource('{"level":"error-ish"}')).toEqual({
+			level: 'error',
+			source: 'text',
+		});
+	});
+
+	it('accepts a non-object payload and ignores nested objects', () => {
+		expect(detectLevelWithSource('[1,2,3]')).toEqual({ level: null, source: null });
+		// A level buried in a nested object is not a declared level; here the text
+		// carries no level word either, so nothing is reported.
+		expect(detectLevel('{"nested":{"level":50}}')).toBeNull();
+		expect(detectLevelWithSource('{"nested":{"level":50}}')).toEqual({ level: null, source: null });
+	});
+
+	it('is reachable through levelFromDeclared', () => {
+		expect(levelFromDeclared('error')).toBe('error');
+		expect(levelFromDeclared(' ERROR ')).toBe('error');
+		expect(levelFromDeclared(50)).toBe('error');
+		expect(levelFromDeclared('nope')).toBeNull();
+		expect(levelFromDeclared(undefined)).toBeNull();
+		expect(isLogLevel('warn')).toBe(true);
+		expect(isLogLevel('notice')).toBe(false);
+	});
+});
+
+/** Builds an event whose level may be absent, explicit `null`, or detected. */
+function line(message: string, level?: LogLevel | null): LogEventDto {
+	return level === undefined
+		? { id: 'id', timestamp: 1, message }
+		: { id: 'id', timestamp: 1, message, level };
+}
+
+describe('effectiveLevel and filterByLevel', () => {
+	it('prefers the level the server detected', () => {
+		expect(effectiveLevel(line('ERROR upstream', 'info'))).toBe('info');
+		expect(effectiveLevel(line('{"level":"warn"}'))).toBe('warn');
+	});
+
+	it('falls back to the text when the server sent no level', () => {
+		expect(effectiveLevel(line('ERROR upstream 503'))).toBe('error');
+		expect(effectiveLevel(line('nothing here'))).toBeNull();
+	});
+
+	it('treats an explicit null as "no level", not as "not detected"', () => {
+		expect(effectiveLevel(line('ERROR upstream 503', null))).toBeNull();
+		expect(matchesLevel(line('ERROR upstream 503', null), 'error')).toBe(false);
+	});
+
+	it('filters by level and keeps unknown lines only in the unfiltered view', () => {
+		const events = [
+			line('{"level":"error","msg":"boom"}'),
+			line('{"level":"info","msg":"ok"}'),
+			line('\tat Handler.java:41'),
+		];
+		expect(filterByLevel(events, null)).toHaveLength(3);
+		expect(filterByLevel(events, 'error').map((e) => e.message)).toEqual([
+			'{"level":"error","msg":"boom"}',
+		]);
+		expect(filterByLevel(events, 'info')).toHaveLength(1);
+		expect(filterByLevel(events, 'debug')).toEqual([]);
+	});
+
+	it('colours an unknown level like a plain line', () => {
+		expect(levelColorClass(null)).toBe(levelColorClass('info'));
+		expect(levelColorClass('error')).toContain('red');
 	});
 });

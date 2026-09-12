@@ -23,7 +23,8 @@ type Running = { child: ReturnType<typeof spawn>; output: () => string; exited: 
 function startCli(): Running {
 	const child = spawn(
 		process.execPath,
-		[cliEntry, '--floci', '--port', String(port), '--no-open'],
+		// `--no-archive` keeps the spawned server away from any real archive file.
+		[cliEntry, '--floci', '--port', String(port), '--no-open', '--no-archive'],
 		{
 			cwd: root,
 			env: { ...process.env, WATCH_TAIL_PLAIN: '1' },

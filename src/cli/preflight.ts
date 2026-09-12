@@ -8,7 +8,7 @@
  * login command repairs it, and the CLI can run it and retry.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import type { ApiErrorBody, IdentityResponse } from '../lib/types.ts';
+import type { ApiErrorBody, ArchiveStatusResponse, IdentityResponse } from '../lib/types.ts';
 
 export type CredentialProbe =
 	| { ok: true }
@@ -135,4 +135,43 @@ export function shortIdentity(arn: string): string {
 	if ((kind === 'assumed-role' || kind === 'role' || kind === 'user') && name !== undefined)
 		return name;
 	return parts.at(-1) ?? arn;
+}
+
+/** Result of asking the app about the local archive. */
+export type ArchiveProbe =
+	| { ok: true; status: ArchiveStatusResponse }
+	| { ok: false; message: string };
+
+/**
+ * Asks the app what the local DuckDB archive holds.
+ *
+ * The route always answers 200 (an unavailable archive is reported inside the
+ * payload), so a failure here means the app itself could not be reached. The CLI
+ * only prints the result: nothing about startup depends on it.
+ */
+export async function readArchive(input: {
+	baseUrl: string;
+	fetchImpl?: typeof fetch;
+	timeoutMs?: number;
+}): Promise<ArchiveProbe> {
+	const { baseUrl, fetchImpl = fetch, timeoutMs = 5000 } = input;
+	try {
+		const response = await fetchImpl(new URL('/api/archive', baseUrl), {
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
+		return { ok: true, status: (await response.json()) as ArchiveStatusResponse };
+	} catch (error) {
+		return { ok: false, message: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+/** One line describing the archive for the startup banner. */
+export function describeArchive(status: ArchiveStatusResponse): string {
+	if (!status.available) return `local history unavailable: ${status.error ?? 'unknown reason'}`;
+	const count =
+		status.rows === 0
+			? 'no events yet'
+			: `${status.rows.toLocaleString('en-US')} event${status.rows === 1 ? '' : 's'}`;
+	return `history ${count} at ${status.path}`;
 }

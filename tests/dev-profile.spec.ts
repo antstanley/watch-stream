@@ -371,11 +371,13 @@ describe('resolveRunRegion', () => {
 });
 
 describe('describeChildEnv', () => {
-	it('prints only AWS_* entries as KEY=value, sorted, blanks included', () => {
+	it('prints AWS_* and WATCH_STREAM_* entries as KEY=value, sorted, blanks included', () => {
 		const env = buildChildEnv({ base: localBase(), profile: 'acme-prod', region: 'us-east-2' });
 		env.PORT = '5179';
 		const lines = describeChildEnv(env);
-		expect(lines.every((line) => line.startsWith('AWS_'))).toBe(true);
+		expect(lines.every((line) => line.startsWith('AWS_') || line.startsWith('WATCH_STREAM_'))).toBe(
+			true,
+		);
 		expect([...lines].toSorted()).toEqual(lines);
 		expect(lines).toContain('AWS_PROFILE=acme-prod');
 		expect(lines).toContain('AWS_REGION=us-east-2');
@@ -383,10 +385,11 @@ describe('describeChildEnv', () => {
 		expect(lines).toContain('AWS_ENDPOINT_URL=');
 		expect(lines).toContain('AWS_ACCESS_KEY_ID=');
 		expect(lines.some((line) => line.startsWith('PATH='))).toBe(false);
+		expect(lines.some((line) => line.startsWith('PORT='))).toBe(false);
 		expect(lines.every((line) => line.includes('='))).toBe(true);
 	});
 
-	it('returns an empty list when nothing AWS_* is set', () => {
+	it('returns an empty list when nothing reproducible is set', () => {
 		expect(describeChildEnv({ PATH: '/bin' })).toEqual([]);
 		expect(describeChildEnv({})).toEqual([]);
 	});
@@ -423,5 +426,42 @@ describe('signalExitCode', () => {
 describe('LOCAL_ENV_FILE', () => {
 	it('names the file written by `pnpm floci:env`', () => {
 		expect(LOCAL_ENV_FILE).toBe('.env.local');
+	});
+});
+
+describe('buildChildEnv and the local history archive', () => {
+	it('leaves the archive variables alone when no archive settings are given', () => {
+		const env = buildChildEnv({ base: localBase(), profile: 'acme-prod' });
+		expect(env.WATCH_STREAM_ARCHIVE).toBeUndefined();
+		expect(env.WATCH_STREAM_ARCHIVE_DB).toBeUndefined();
+	});
+
+	it('turns the archive off with a blank path', () => {
+		const env = buildChildEnv({
+			base: localBase(),
+			archive: { enabled: false, path: null },
+		});
+		expect(env.WATCH_STREAM_ARCHIVE).toBe('off');
+		expect(env.WATCH_STREAM_ARCHIVE_DB).toBe('');
+	});
+
+	it('forwards an explicit database path and keeps the archive on', () => {
+		const env = buildChildEnv({
+			base: localBase(),
+			archive: { enabled: true, path: '/tmp/logs.duckdb' },
+		});
+		expect(env.WATCH_STREAM_ARCHIVE).toBe('');
+		expect(env.WATCH_STREAM_ARCHIVE_DB).toBe('/tmp/logs.duckdb');
+	});
+
+	it('does not disturb the AWS variables', () => {
+		const env = buildChildEnv({
+			base: localBase(),
+			profile: 'acme-prod',
+			region: 'us-east-2',
+			archive: { enabled: false, path: null },
+		});
+		expect(env.AWS_PROFILE).toBe('acme-prod');
+		expect(env.AWS_REGION).toBe('us-east-2');
 	});
 });

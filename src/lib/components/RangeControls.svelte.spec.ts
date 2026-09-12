@@ -20,6 +20,30 @@ function setup(overrides: Record<string, unknown> = {}) {
 }
 
 describe('RangeControls', () => {
+	it('disables the live chip when the source cannot follow live events', async () => {
+		const onApply = setup({ mode: 'historic', range: '24h', liveDisabled: true });
+
+		const live = screen.getByTestId('mode-live') as HTMLButtonElement;
+		expect(live.disabled).toBe(true);
+		expect(live.getAttribute('title')).toContain('nothing to tail');
+
+		// Clicking it changes nothing: the archive has no live window to open.
+		await fireEvent.click(live);
+		expect(onApply).not.toHaveBeenCalled();
+
+		// The historic window stays usable.
+		expect((screen.getByTestId('mode-historic') as HTMLButtonElement).disabled).toBe(false);
+		expect((screen.getByTestId('preset-24h') as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	it('leaves live enabled by default', async () => {
+		const onApply = setup({ mode: 'historic', range: '24h' });
+
+		const live = screen.getByTestId('mode-live') as HTMLButtonElement;
+		expect(live.disabled).toBe(false);
+		await fireEvent.click(live);
+		expect(onApply).toHaveBeenCalledWith({ mode: 'live', range: '', from: null, to: null });
+	});
 	it('starts in live mode with the historic toggle available', () => {
 		setup();
 

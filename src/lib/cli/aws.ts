@@ -223,6 +223,16 @@ export type ChildEnvInput = {
 	 * the user's chosen profile is what they meant.
 	 */
 	clearStaticKeys?: boolean;
+	/** Local DuckDB archive settings for the server. */
+	archive?: ArchiveEnvInput | null;
+};
+
+/** Local archive settings forwarded to the server. */
+type ArchiveEnvInput = {
+	/** False tells the server not to open the archive at all. */
+	enabled: boolean;
+	/** Database file, or `null` to let the server use its default path. */
+	path: string | null;
 };
 
 /** Throwaway credentials local emulators accept; floci never checks them. */
@@ -245,6 +255,7 @@ export function buildChildEnv({
 	region = null,
 	endpoint = null,
 	clearStaticKeys = false,
+	archive = null,
 }: ChildEnvInput): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...base };
 	const name = normalize(profile);
@@ -275,6 +286,13 @@ export function buildChildEnv({
 	if (code !== null) {
 		env.AWS_REGION = code;
 		env.AWS_DEFAULT_REGION = code;
+	}
+
+	if (archive !== null) {
+		// A blank value means "unset" to the server, so `--db` and `--no-archive`
+		// can each be expressed without removing the variable.
+		env.WATCH_STREAM_ARCHIVE = archive.enabled ? '' : 'off';
+		env.WATCH_STREAM_ARCHIVE_DB = archive.path ?? '';
 	}
 
 	return env;
@@ -356,10 +374,14 @@ export function isEmulatorEndpoint(endpoint: string): boolean {
  * local emulator settings were neutralized for this run.
  */
 export function describeChildEnv(env: NodeJS.ProcessEnv): string[] {
-	return Object.keys(env)
-		.filter((key) => key.startsWith('AWS_'))
-		.toSorted(compareNames)
-		.map((key) => `${key}=${env[key] ?? ''}`);
+	return (
+		Object.keys(env)
+			// `WATCH_STREAM_*` is part of the effective configuration too: a
+			// `--no-archive` or `--db` run is only reproducible if `--print` shows it.
+			.filter((key) => key.startsWith('AWS_') || key.startsWith('WATCH_STREAM_'))
+			.toSorted(compareNames)
+			.map((key) => `${key}=${env[key] ?? ''}`)
+	);
 }
 
 /** Reads the shared AWS config file, or an empty string when it is missing. */
