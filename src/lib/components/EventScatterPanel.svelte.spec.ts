@@ -54,18 +54,29 @@ function props(overrides: Record<string, unknown> = {}) {
 	};
 }
 
+/**
+ * Text of an element with runs of whitespace collapsed.
+ *
+ * The header wraps its summary across lines, and a browser renders that as one
+ * space, so an assertion must not depend on where the formatter broke it.
+ */
+function text(testId: string): string {
+	return (screen.getByTestId(testId).textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
 describe('EventScatterPanel', () => {
 	it('summarises the window and each level in the header', () => {
 		render(EventScatterPanel, { props: props() });
-		expect(screen.getByTestId('scatter-summary').textContent).toContain('12 events in 4 buckets');
-		expect(screen.getByTestId('scatter-legend-error').textContent).toContain('Error');
-		expect(screen.getByTestId('scatter-legend-info').textContent).toContain('Info');
-		expect(screen.getByTestId('scatter-hint').textContent).toContain('drag to zoom');
+		// Grouping by request is the default, so the summary counts requests.
+		expect(text('scatter-summary')).toContain('12 requests in 4 buckets');
+		expect(text('scatter-legend-error')).toContain('Error');
+		expect(text('scatter-legend-info')).toContain('Info');
+		expect(text('scatter-hint')).toContain('drag to zoom');
 	});
 
 	it('names the groups when the view holds more than one', () => {
 		render(EventScatterPanel, { props: props({ groups: ['/a', '/b'] }) });
-		expect(screen.getByTestId('scatter-groups').textContent).toContain('2 groups');
+		expect(text('scatter-groups')).toContain('2 groups');
 	});
 
 	it('shows a placeholder until the chart chunk arrives', async () => {
@@ -152,5 +163,24 @@ describe('EventScatterPanel', () => {
 		// Reset zoom in the host calls the panel, which clears the chart's brush.
 		(rendered.component as unknown as { reset: () => void }).reset();
 		expect(onBrush).toHaveBeenCalledWith(null);
+	});
+});
+
+describe('EventScatterPanel: what a mark stands for', () => {
+	const marks: SeriesPoint[] = [
+		{ t: 1_700_000_000_000, group: '/aws/app', level: 'error', events: 3 },
+		{ t: 1_700_000_060_000, group: '/aws/app', level: 'info', events: 1 },
+	];
+
+	it('counts requests by default', () => {
+		render(EventScatterPanel, { props: { points: marks, from: 0, to: 1, bucketMs: 60_000 } });
+		expect(text('scatter-summary')).toContain('4 requests');
+	});
+
+	it('counts lines when grouping is off', () => {
+		render(EventScatterPanel, {
+			props: { points: marks, from: 0, to: 1, bucketMs: 60_000, byRequest: false },
+		});
+		expect(text('scatter-summary')).toContain('4 events');
 	});
 });

@@ -241,6 +241,8 @@ describe('GET /api/stream', () => {
 					group: '/aws/lambda/demo',
 					// A live event carries no level of its own: the server detected none.
 					level: null,
+					// Nor a request id: nothing in "hello" looks like one.
+					requestId: null,
 				},
 			],
 		});
@@ -616,8 +618,12 @@ describe('GET /api/stream source=archive', () => {
 			endpoint: null,
 			mode: 'historic',
 		});
+		// Every streamed event carries both detected fields: `level: null` means the
+		// line had no level and `requestId: null` that it names no request.
 		expect(reader.frames[1]?.data).toEqual({
-			events: [{ id: 'a1', timestamp: 1000, message: 'from the archive' }],
+			events: [
+				{ id: 'a1', timestamp: 1000, message: 'from the archive', level: null, requestId: null },
+			],
 		});
 		expect(reader.frames[2]?.data).toEqual({ reason: 'window-complete' });
 		// Reading the archive must not write to it.
@@ -700,12 +706,12 @@ describe('GET /api/stream source=archive', () => {
 		expect(mocks.send).not.toHaveBeenCalled();
 	});
 
-	test('detects the level of live events before sending them', async () => {
+	test('detects the level and the request id of live events before sending them', async () => {
 		queueSend([
 			{
 				events: [
-					event('e1', 1000, '{"level":"warn","msg":"slow upstream"}'),
-					event('e2', 1001, 'ERROR upstream 503'),
+					event('e1', 1000, '{"level":"warn","msg":"slow upstream","requestId":"req-9f2c"}'),
+					event('e2', 1001, 'ERROR upstream 503 RequestId: 1a2b3c4d'),
 					event('e3', 1002, '\tat Handler.java:41'),
 				],
 			},
@@ -721,29 +727,46 @@ describe('GET /api/stream source=archive', () => {
 		controller.abort();
 		await withTimeout(reader.done, 2000, 'stream end');
 
-		const payload = reader.frames[1]?.data as { events: { id: string; level: string | null }[] };
-		expect(payload.events.map((entry) => [entry.id, entry.level])).toEqual([
-			['e1', 'warn'],
-			['e2', 'error'],
-			['e3', null],
+		const payload = reader.frames[1]?.data as {
+			events: { id: string; level: string | null; requestId: string | null }[];
+		};
+		expect(payload.events.map((entry) => [entry.id, entry.level, entry.requestId])).toEqual([
+			['e1', 'warn', 'req-9f2c'],
+			['e2', 'error', '1a2b3c4d'],
+			['e3', null, null],
 		]);
 		// The archive stores what the client was shown.
-		const archived = archiveState.records[0]?.events as { level?: string | null }[] | undefined;
+		const archived = archiveState.records[0]?.events as
+			| { level?: string | null; requestId?: string | null }[]
+			| undefined;
 		expect(archived?.map((entry) => entry.level)).toEqual(['warn', 'error', null]);
+		expect(archived?.map((entry) => entry.requestId)).toEqual(['req-9f2c', '1a2b3c4d', null]);
 	});
 
-	test('keeps the level stored in the archive when replaying it', async () => {
+	test('keeps what the archive stored when replaying it', async () => {
 		archiveState.pages = [
 			{
 				events: [
 					{
 						id: 'a1',
 						timestamp: 1000,
-						message: 'ERROR looking, but stored as debug',
+						message: 'ERROR looking, but stored as debug RequestId: 1a2b3c4d',
 						level: 'debug',
+						requestId: 'req-stored',
 					},
-					{ id: 'a2', timestamp: 1001, message: '{"level":"warn"}', level: 'warn' },
-					{ id: 'a3', timestamp: 1002, message: 'no signal here', level: null },
+					{
+						id: 'a2',
+						timestamp: 1001,
+						message: '{"level":"warn","requestId":"req-from-message"}',
+						level: 'warn',
+					},
+					{
+						id: 'a3',
+						timestamp: 1002,
+						message: 'nothing stored, but RequestId: 1a2b3c4d here',
+						level: null,
+						requestId: null,
+					},
 				],
 				last: { timestamp: 1002, seq: 3 },
 			},
@@ -758,8 +781,17 @@ describe('GET /api/stream source=archive', () => {
 		const reader = startReading(response);
 		await withTimeout(reader.done, 2000, 'archive stream end');
 
-		const payload = reader.frames[1]?.data as { events: { id: string; level: string | null }[] };
-		expect(payload.events.map((entry) => entry.level)).toEqual(['debug', 'warn', null]);
+		const payload = reader.frames[1]?.data as {
+			events: { id: string; level: string | null; requestId: string | null }[];
+		};
+		// A stored level and a stored request id are verdicts and are not re-guessed,
+		// a missing request id is detected from the message, and a row written before
+		// the column existed is detected here too.
+		expect(payload.events.map((entry) => [entry.id, entry.level, entry.requestId])).toEqual([
+			['a1', 'debug', 'req-stored'],
+			['a2', 'warn', 'req-from-message'],
+			['a3', null, null],
+		]);
 	});
 
 	test('passes the level filter to the archive reader', async () => {

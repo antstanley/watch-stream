@@ -53,7 +53,7 @@ import {
 	type CredentialProbe,
 	type IdentityProbe,
 } from './preflight.ts';
-import { createUi, isInteractive, type Ui } from './ui.ts';
+import { PromptCancelled, createUi, isInteractive, type Ui } from './ui.ts';
 
 /** Every side effect the CLI needs, so tests can run it in-process. */
 export type CliIo = {
@@ -391,128 +391,147 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 		host: options.host,
 		verbose: options.verbose,
 	});
-	const ready = await io.waitForHealth(healthUrl(url), { fetchImpl: fetch });
-	if (!ready) {
-		ui.failSpinner(`the server did not answer on ${url}`);
-		await stopServer(child);
-		return 1;
-	}
-	ui.stopSpinner(`listening on ${url}`);
-
-	// Report where history is kept before the AWS check: it is the one thing the
-	// UI can offer even when credentials are not usable yet.
-	if (!options.archive) {
-		ui.info('local history off (--no-archive)');
-	} else {
-		const archive = await io.readArchive({ baseUrl: url });
-		if (archive.ok) {
-			if (archive.status.available) ui.info(describeArchive(archive.status));
-			else ui.warn(describeArchive(archive.status));
-		} else {
-			ui.warn(`could not read the local history status: ${archive.message}`);
-		}
-	}
-
-	// Before sending anyone to a UI that cannot load logs, check that AWS will
-	// actually answer, and offer the login that fixes it.
-	const assessment = await assessCredentials({
-		options,
-		io,
-		ui,
-		url,
-		region,
-		startProfile: profile,
-	});
-	if (assessment.status === 'other') {
-		ui.warn(`could not list log groups: ${assessment.message}`);
-	}
-
-	if (assessment.status === 'credentials') {
-		// A profile that was not in play needs the app restarted with it: that is
-		// the only way to find out whether its credentials already work, and the
-		// only way the browser can use it.
-		const activeProfile = assessment.chosen === null ? null : assessment.chosen;
-		let activeRegion = region;
-		let failureMessage = assessment.message;
-		let failureCode = assessment.code;
-
-		if (assessment.chosen !== null) {
-			activeRegion = resolveRunRegion({
-				region: options.region,
-				profile: assessment.chosen,
-				base: io.env,
-				configText: io.readConfigText(),
-			});
-			ui.info(`restarting with profile ${assessment.chosen}`);
+	try {
+		const ready = await io.waitForHealth(healthUrl(url), { fetchImpl: fetch });
+		if (!ready) {
+			ui.failSpinner(`the server did not answer on ${url}`);
 			await stopServer(child);
-			child = io.startServerImpl({
-				appRoot: io.appRoot,
-				env: buildChildEnv({
-					base: baseEnv,
-					profile: assessment.chosen,
-					region: activeRegion,
-					endpoint: null,
-					archive: { enabled: options.archive, path: options.db },
-				}),
-				port: options.port,
-				host: options.host,
-				verbose: options.verbose,
-			});
-			const healthy = await io.waitForHealth(healthUrl(url), { fetchImpl: fetch });
-			if (!healthy) {
-				ui.failSpinner(`the server did not come back up on ${url}`);
-				await stopServer(child);
-				return 1;
-			}
+			return 1;
+		}
+		ui.stopSpinner(`listening on ${url}`);
 
-			// Now the question is about the chosen profile, not the ambient one.
-			const identity = await io.readIdentity({ baseUrl: url, region: activeRegion });
-			if (identity.ok) {
-				ui.info(
-					`profile ${assessment.chosen} already works (${shortIdentity(identity.identity.arn)}) - using it`,
-				);
-				ui.outro(`${url} (Ctrl+C to stop)`);
-				if (options.open) io.openBrowser(url);
-				const code = await io.waitForStop(child);
-				ui.outro('stopped');
-				return code;
+		// Report where history is kept before the AWS check: it is the one thing the
+		// UI can offer even when credentials are not usable yet.
+		if (!options.archive) {
+			ui.info('local history off (--no-archive)');
+		} else {
+			const archive = await io.readArchive({ baseUrl: url });
+			if (archive.ok) {
+				if (archive.status.available) ui.info(describeArchive(archive.status));
+				else ui.warn(describeArchive(archive.status));
+			} else {
+				ui.warn(`could not read the local history status: ${archive.message}`);
 			}
-			failureMessage = identity.message;
-			failureCode = identity.code;
 		}
 
-		const outcome = await offerLogin({
+		// Before sending anyone to a UI that cannot load logs, check that AWS will
+		// actually answer, and offer the login that fixes it.
+		const assessment = await assessCredentials({
 			options,
 			io,
 			ui,
-			profile: activeProfile ?? assessment.profile,
-			failureMessage,
-			failureCode,
+			url,
+			region,
+			startProfile: profile,
 		});
-
-		if (outcome.login === 'succeeded') {
-			const identity = await io.readIdentity({ baseUrl: url, region: activeRegion });
-			if (identity.ok) {
-				ui.info(
-					`signed in as ${shortIdentity(identity.identity.arn)}${activeProfile === null ? '' : ` (${activeProfile})`}`,
-				);
-			} else {
-				ui.warn(`still failing after login: ${identity.message}`);
-			}
-		} else if (activeProfile !== null) {
-			ui.info(`the app is using profile ${activeProfile}; log in, then press Refresh in the UI`);
+		if (assessment.status === 'other') {
+			ui.warn(`could not list log groups: ${assessment.message}`);
 		}
+
+		if (assessment.status === 'credentials') {
+			// A profile that was not in play needs the app restarted with it: that is
+			// the only way to find out whether its credentials already work, and the
+			// only way the browser can use it.
+			const activeProfile = assessment.chosen === null ? null : assessment.chosen;
+			let activeRegion = region;
+			let failureMessage = assessment.message;
+			let failureCode = assessment.code;
+
+			if (assessment.chosen !== null) {
+				activeRegion = resolveRunRegion({
+					region: options.region,
+					profile: assessment.chosen,
+					base: io.env,
+					configText: io.readConfigText(),
+				});
+				ui.info(`restarting with profile ${assessment.chosen}`);
+				await stopServer(child);
+				child = io.startServerImpl({
+					appRoot: io.appRoot,
+					env: buildChildEnv({
+						base: baseEnv,
+						profile: assessment.chosen,
+						region: activeRegion,
+						endpoint: null,
+						archive: { enabled: options.archive, path: options.db },
+					}),
+					port: options.port,
+					host: options.host,
+					verbose: options.verbose,
+				});
+				const healthy = await io.waitForHealth(healthUrl(url), { fetchImpl: fetch });
+				if (!healthy) {
+					ui.failSpinner(`the server did not come back up on ${url}`);
+					await stopServer(child);
+					return 1;
+				}
+
+				// Now the question is about the chosen profile, not the ambient one.
+				const identity = await io.readIdentity({ baseUrl: url, region: activeRegion });
+				if (identity.ok) {
+					ui.info(
+						`profile ${assessment.chosen} already works (${shortIdentity(identity.identity.arn)}) - using it`,
+					);
+					ui.outro(`${url} (Ctrl+C to stop)`);
+					if (options.open) io.openBrowser(url);
+					const code = await io.waitForStop(child);
+					ui.outro('stopped');
+					return code;
+				}
+				failureMessage = identity.message;
+				failureCode = identity.code;
+			}
+
+			const outcome = await offerLogin({
+				options,
+				io,
+				ui,
+				profile: activeProfile ?? assessment.profile,
+				failureMessage,
+				failureCode,
+			});
+
+			if (outcome.login === 'succeeded') {
+				const identity = await io.readIdentity({ baseUrl: url, region: activeRegion });
+				if (identity.ok) {
+					ui.info(
+						`signed in as ${shortIdentity(identity.identity.arn)}${activeProfile === null ? '' : ` (${activeProfile})`}`,
+					);
+				} else {
+					ui.warn(`still failing after login: ${identity.message}`);
+				}
+			} else if (activeProfile !== null) {
+				ui.info(`the app is using profile ${activeProfile}; log in, then press Refresh in the UI`);
+			}
+		}
+
+		if (options.open) io.openBrowser(url);
+		ui.outro(`${url} (Ctrl+C to stop)`);
+
+		const code = await io.waitForStop(child);
+		ui.outro('stopped');
+		return code;
+	} catch (error) {
+		if (!(error instanceof PromptCancelled)) throw error;
+		// Ctrl+C at a prompt is a stop, not an answer to the question: shut the
+		// server down and report it the same way a Ctrl+C at a running server does.
+		ui.outro('stopped');
+		return await stopServer(child);
 	}
-
-	if (options.open) io.openBrowser(url);
-	ui.outro(`${url} (Ctrl+C to stop)`);
-
-	const code = await io.waitForStop(child);
-	ui.outro('stopped');
-	return code;
 }
 
-/** Entry point used by `bin.ts`: runs the CLI and sets the exit code. */
+/**
+ * Entry point used by `bin.ts`: runs the CLI and sets the exit code.
+ *
+ * A cancelled prompt that `run` did not convert into a stop still exits like an
+ * interrupted process (130) instead of throwing "the prompt was cancelled" at
+ * someone who just pressed Ctrl+C.
+ */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-	process.exitCode = await run(argv);
+	try {
+		process.exitCode = await run(argv);
+	} catch (error) {
+		if (!(error instanceof PromptCancelled)) throw error;
+		process.exitCode = 130;
+	}
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { LEVEL_PARAM_HINT, parseLevelParam, withLevels } from './level-filter';
+import { LEVEL_PARAM_HINT, parseLevelParam, withDetections } from './level-filter';
 import type { LogEventDto } from '$lib/types';
 
 const line = (message: string, level?: LogEventDto['level']): LogEventDto =>
@@ -29,25 +29,67 @@ describe('parseLevelParam', () => {
 	});
 });
 
-describe('withLevels', () => {
-	test('detects the level of an event that has none', () => {
-		expect(withLevels([line('ERROR upstream 503')])).toEqual([
-			{ id: 'id', timestamp: 1, message: 'ERROR upstream 503', level: 'error' },
+describe('withDetections', () => {
+	test('detects both fields of an event that carries neither', () => {
+		expect(withDetections([line('ERROR upstream 503 RequestId: 1a2b3c4d')])).toEqual([
+			{
+				id: 'id',
+				timestamp: 1,
+				message: 'ERROR upstream 503 RequestId: 1a2b3c4d',
+				level: 'error',
+				requestId: '1a2b3c4d',
+			},
 		]);
-		expect(withLevels([line('{"level":"warn"}')])[0]?.level).toBe('warn');
-		expect(withLevels([line('plain line')])[0]?.level).toBeNull();
+		expect(withDetections([line('{"level":"warn","requestId":"req-9f2c"}')])[0]).toMatchObject({
+			level: 'warn',
+			requestId: 'req-9f2c',
+		});
+		// No signal at all is reported as such, not guessed at.
+		expect(withDetections([line('plain line')])[0]).toEqual({
+			id: 'id',
+			timestamp: 1,
+			message: 'plain line',
+			level: null,
+			requestId: null,
+		});
 	});
 
 	test('keeps a level that is already there, including an explicit null', () => {
 		// Replaying the archive must not re-guess a stored level.
-		expect(withLevels([line('ERROR looking, but debug', 'debug')])[0]?.level).toBe('debug');
-		expect(withLevels([line('ERROR looking, but unknown', null)])[0]?.level).toBeNull();
+		expect(withDetections([line('ERROR looking, but debug', 'debug')])[0]?.level).toBe('debug');
+		expect(withDetections([line('ERROR looking, but unknown', null)])[0]?.level).toBeNull();
+	});
+
+	test('keeps a stored request id and a stored verdict, and fills a missing one', () => {
+		const stored = {
+			id: 'id',
+			timestamp: 1,
+			message: '{"requestId":"from-message"}',
+			level: 'info' as const,
+			requestId: 'from-archive',
+		};
+		expect(withDetections([stored])[0]).toBe(stored);
+
+		// An explicit `null` is the archive's answer: the row has no request id.
+		const noId = { ...stored, requestId: null };
+		expect(withDetections([noId])[0]).toBe(noId);
+
+		// A row written before the column existed has no property at all, so the id
+		// is still detected from the message.
+		const legacy: LogEventDto = {
+			id: 'id',
+			timestamp: 1,
+			message: 'ok {"requestId":"from-message"}',
+			level: 'info',
+		};
+		expect(withDetections([legacy])[0]).toEqual({ ...legacy, requestId: 'from-message' });
 	});
 
 	test('does not mutate the events it was given', () => {
-		const original = line('ERROR upstream 503');
-		const [tagged] = withLevels([original]);
+		const original = line('ERROR upstream 503 RequestId: 1a2b3c4d');
+		const [tagged] = withDetections([original]);
 		expect(original.level).toBeUndefined();
+		expect(original.requestId).toBeUndefined();
 		expect(tagged).not.toBe(original);
 	});
 });

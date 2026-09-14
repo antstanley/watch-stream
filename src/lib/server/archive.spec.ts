@@ -15,6 +15,7 @@ import {
 import {
 	ARCHIVE_INSERT_CHUNK,
 	ARCHIVE_INSERT_COLUMNS,
+	REQUEST_ID_BACKFILL_LIMIT,
 	archiveEventKey,
 	type ArchiveParam,
 } from './archive-sql';
@@ -166,7 +167,11 @@ describe('LogArchive.open', () => {
 		expect(fake.connects()).toBe(1);
 		expect(statements[0]).toContain('CREATE SEQUENCE IF NOT EXISTS log_events_seq');
 		expect(statements[1]).toContain('CREATE TABLE IF NOT EXISTS log_events');
-		expect(statements.at(-1)).toContain('CREATE INDEX IF NOT EXISTS log_events_time');
+		expect(statements.some((statement) => statement.includes('log_events_time'))).toBe(true);
+		// The request-id backfill runs once the schema is in place, so it can read a
+		// column that an older file only just grew.
+		expect(statements.some((statement) => statement.includes('max(seq) AS maxSeq'))).toBe(true);
+		expect(statements.some((statement) => statement.includes('CREATE INDEX'))).toBe(true);
 	});
 
 	test('creates the parent directory before opening', async () => {
@@ -398,6 +403,120 @@ describe('LogArchive reads', () => {
 		await archive.close();
 		expect(fake.closes()).toBe(1);
 		expect(archive.available).toBe(false);
+	});
+});
+
+describe('LogArchive request-id backfill', () => {
+	/** Candidates the fake backfill scan returns, in `seq` order. */
+	const candidates = [
+		{
+			event_key: 'k1',
+			region: 'af-south-1',
+			log_group: '/g',
+			message: 'RequestId: 1a2b3c4d',
+			seq: BigInt(3),
+		},
+		{
+			event_key: 'k2',
+			region: 'af-south-1',
+			log_group: '/g',
+			message: 'no id on this line',
+			seq: BigInt(4),
+		},
+	];
+
+	test('fills the ids of rows written before the column existed', async () => {
+		const fake = fakeDriver({
+			respond: (sql) => {
+				if (sql.includes('max(seq)')) return [{ maxSeq: BigInt(4) }];
+				if (sql.includes('FROM archive_meta')) return [];
+				if (sql.includes('request_id IS NULL')) return candidates;
+				return [];
+			},
+		});
+		const archive = await LogArchive.open({
+			path: '/tmp/archive.duckdb',
+			load: async () => fake.driver,
+			ensureDir: () => undefined,
+		});
+
+		expect(archive.available).toBe(true);
+		expect(archive.error).toBeNull();
+		// One statement for the row that has an id, none for the row that has not.
+		const updates = fake.calls.filter((call) => call.sql.startsWith('UPDATE log_events'));
+		expect(updates).toHaveLength(1);
+		expect(updates[0]?.params).toEqual(['af-south-1', '/g', 'k1', '1a2b3c4d']);
+		// The watermark is the highest `seq` the pass looked at.
+		const state = fake.calls.find((call) =>
+			call.sql.includes('INSERT OR REPLACE INTO archive_meta'),
+		);
+		expect(state?.params).toEqual(['4']);
+	});
+
+	test('does not scan again once the watermark has caught up', async () => {
+		const fake = fakeDriver({
+			respond: (sql) => {
+				if (sql.includes('max(seq)')) return [{ maxSeq: BigInt(9) }];
+				if (sql.includes('FROM archive_meta')) return [{ value: '9' }];
+				return [];
+			},
+		});
+		const archive = await LogArchive.open({
+			path: '/tmp/archive.duckdb',
+			load: async () => fake.driver,
+			ensureDir: () => undefined,
+		});
+		expect(archive.available).toBe(true);
+		expect(fake.calls.some((call) => call.sql.includes('request_id IS NULL'))).toBe(false);
+		expect(fake.calls.some((call) => call.sql.includes('INSERT OR REPLACE'))).toBe(false);
+	});
+
+	test('stops a capped pass at the last row it read and chunks its updates', async () => {
+		const rows = Array.from({ length: REQUEST_ID_BACKFILL_LIMIT }, (_, index) => ({
+			event_key: `k${index}`,
+			region: 'af-south-1',
+			log_group: '/g',
+			message: `RequestId: 1a2b3c4d-${index}`,
+			seq: BigInt(index + 1),
+		}));
+		const fake = fakeDriver({
+			respond: (sql) => {
+				if (sql.includes('max(seq)')) return [{ maxSeq: BigInt(50_000) }];
+				if (sql.includes('FROM archive_meta')) return [];
+				if (sql.includes('request_id IS NULL')) return rows;
+				return [];
+			},
+		});
+		const archive = await LogArchive.open({
+			path: '/tmp/archive.duckdb',
+			load: async () => fake.driver,
+			ensureDir: () => undefined,
+		});
+
+		expect(archive.available).toBe(true);
+		const updates = fake.calls.filter((call) => call.sql.startsWith('UPDATE log_events'));
+		expect(updates).toHaveLength(REQUEST_ID_BACKFILL_LIMIT / ARCHIVE_INSERT_CHUNK);
+		const state = fake.calls.find((call) =>
+			call.sql.includes('INSERT OR REPLACE INTO archive_meta'),
+		);
+		// Capped at the row budget: the next open carries on from here.
+		expect(state?.params).toEqual([String(REQUEST_ID_BACKFILL_LIMIT)]);
+	});
+
+	test('reports a failed backfill without failing the open', async () => {
+		const fake = fakeDriver({
+			respond: (sql) => {
+				if (sql.includes('max(seq)')) throw new Error('table log_events is gone');
+				return [];
+			},
+		});
+		const archive = await LogArchive.open({
+			path: '/tmp/archive.duckdb',
+			load: async () => fake.driver,
+			ensureDir: () => undefined,
+		});
+		expect(archive.available).toBe(true);
+		expect(archive.error).toBe('table log_events is gone');
 	});
 });
 
@@ -690,5 +809,160 @@ describe('describeOpenError and the lock retry', () => {
 		});
 		expect(archive.available).toBe(false);
 		expect(archive.error).toContain('locked by another process');
+	});
+});
+
+/** Driver instance with the close the real driver exposes and the type omits. */
+type ClosableInstance = { connect: () => Promise<DriverConnection>; closeSync?: () => void };
+
+/**
+ * Runs statements against an archive file no {@link LogArchive} holds open.
+ *
+ * The spec uses it to put a file into the state an older build left behind, and
+ * to read back what the archive wrote (the `archive_meta` watermark, for
+ * instance), which the archive API does not expose.
+ */
+async function runRaw(
+	path: string,
+	statements: readonly (readonly [string, readonly ArchiveParam[]])[],
+): Promise<void> {
+	const driver = await loadDuckDbDriver();
+	const instance = (await driver.DuckDBInstance.create(path)) as ClosableInstance;
+	const connection = await instance.connect();
+	try {
+		for (const [sql, params] of statements) await connection.run(sql, [...params]);
+	} finally {
+		connection.closeSync?.();
+		instance.closeSync?.();
+	}
+}
+
+/** Reads one statement from a closed archive file. */
+async function readRaw(path: string, sql: string): Promise<Record<string, unknown>[]> {
+	const driver = await loadDuckDbDriver();
+	const instance = (await driver.DuckDBInstance.create(path)) as ClosableInstance;
+	const connection = await instance.connect();
+	try {
+		const result = await connection.runAndReadAll(sql);
+		return result.getRowObjects();
+	} finally {
+		connection.closeSync?.();
+		instance.closeSync?.();
+	}
+}
+
+describe.skipIf(!driverInstalled)('request ids against a real database file', () => {
+	test('fills the ids of an archive written before the column existed', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'watch-tail-backfill-'));
+		const path = join(dir, 'archive.duckdb');
+		try {
+			const first = await LogArchive.open({ path });
+			await first.record('af-south-1', '/g', [
+				event({ id: 'k1', timestamp: TS, message: '{"message":"ok","requestId":"req-9f2c"}' }),
+				event({ id: 'k2', timestamp: TS + 1, message: 'boom RequestId: 1a2b3c4d' }),
+				event({ id: 'k3', timestamp: TS + 2, message: 'plain line' }),
+			]);
+			await first.close();
+
+			// What an older build left behind: rows without ids and no watermark.
+			await runRaw(path, [
+				['UPDATE log_events SET request_id = NULL', []],
+				['DELETE FROM archive_meta', []],
+			]);
+
+			const second = await LogArchive.open({ path });
+			expect(second.available).toBe(true);
+			expect(second.error).toBeNull();
+			const page = await second.page({
+				region: 'af-south-1',
+				logGroups: ['/g'],
+				startTime: TS,
+				endTime: TS + 10,
+				limit: 10,
+			});
+			expect(page.events.map((entry) => [entry.id, entry.requestId])).toEqual([
+				['k1', 'req-9f2c'],
+				['k2', '1a2b3c4d'],
+				// Nothing to detect: the row stays NULL, and no property is sent.
+				['k3', undefined],
+			]);
+			await second.close();
+
+			// The watermark is the highest `seq` the pass looked at, and the row it
+			// could not fill stayed NULL rather than becoming an empty string.
+			expect(await readRaw(path, 'SELECT key, value FROM archive_meta')).toEqual([
+				{ key: 'request_id_backfill', value: '3' },
+			]);
+			expect(
+				await readRaw(path, 'SELECT event_key, request_id FROM log_events ORDER BY seq'),
+			).toEqual([
+				{ event_key: 'k1', request_id: 'req-9f2c' },
+				{ event_key: 'k2', request_id: '1a2b3c4d' },
+				{ event_key: 'k3', request_id: null },
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test('counts one mark per request', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'watch-tail-request-series-'));
+		const base = Date.UTC(2024, 4, 17, 12, 0, 0);
+		const archive = await LogArchive.open({ path: join(dir, 'archive.duckdb') });
+		try {
+			await archive.record('af-south-1', '/a', [
+				event({
+					id: 'r1',
+					timestamp: base + 1_000,
+					message: '{"requestId":"req-1","level":"info"}',
+				}),
+				event({
+					id: 'r2',
+					timestamp: base + 2_000,
+					message: '{"requestId":"req-1","level":"error"}',
+				}),
+				event({
+					id: 'r3',
+					timestamp: base + 3_000,
+					message: '{"requestId":"req-1","level":"info"}',
+				}),
+				event({ id: 'x1', timestamp: base + 4_000, message: '{"level":"warn"}' }),
+				event({ id: 'x2', timestamp: base + 14_000, message: 'no id, no level' }),
+			]);
+
+			const request = {
+				region: 'af-south-1',
+				logGroups: ['/a'],
+				startTime: base,
+				endTime: base + 30_000,
+				bucketMs: 10_000,
+				by: 'request' as const,
+			};
+			const rows = await archive.seriesQuery(request);
+			// Three lines of req-1 are one mark, at their first line, coloured by the
+			// error among them; a line with no request id is a request of its own.
+			expect(rows.map((row) => [row.t - base, row.group, row.level, row.events])).toEqual([
+				[0, '/a', 'error', 1],
+				[0, '/a', 'warn', 1],
+				[10_000, '/a', 'unknown', 1],
+			]);
+
+			const errors = await archive.seriesQuery({ ...request, levels: ['error'] });
+			// The filter selects a request by its worst level, so the warn-only and the
+			// unlevelled requests are out.
+			expect(errors.map((row) => [row.t - base, row.level, row.events])).toEqual([[0, 'error', 1]]);
+
+			// The event form still counts every line, so the old answer is unchanged.
+			const events = await archive.seriesQuery({ ...request, by: 'event' });
+			expect(events.map((row) => [row.level, row.events]).toSorted()).toEqual([
+				['error', 1],
+				['info', 2],
+				['unknown', 1],
+				['warn', 1],
+			]);
+		} finally {
+			await archive.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

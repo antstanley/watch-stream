@@ -127,7 +127,21 @@
 		}}
 	>
 		{#snippet tooltip()}
-			<Tooltip.Root>
+			<!--
+				The tooltip is styled here instead of being left to layerchart: its own
+				background and text colour come from `--color-surface-*` variables that
+				only its framework presets (shadcn-svelte, Skeleton, daisyUI) define, so
+				without one the tooltip renders fully transparent with black text - on
+				this dark chart that is unreadable. The classes below are Tailwind
+				utilities, which come after layerchart's `@layer components`, so they win.
+			-->
+			<Tooltip.Root
+				classes={{
+					container:
+						'rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-100 shadow-lg',
+					content: 'text-xs',
+				}}
+			>
 				{#snippet children({ data }: { data: SeriesPoint })}
 					<Tooltip.Header value={data.level} color={SERIES_LEVEL_COLOR[data.level]} />
 					<Tooltip.List>

@@ -106,6 +106,16 @@ function pageUrl(options: Options, group: string | null): string {
 	return url.toString();
 }
 
+/** True when a computed colour is actually painted, rather than transparent. */
+function painted(value: string): boolean {
+	return (
+		value !== '' &&
+		value !== 'transparent' &&
+		!/^rgba\([^)]*,\s*0(\.0+)?\)$/.test(value) &&
+		value !== 'rgba(0, 0, 0, 0)'
+	);
+}
+
 /** Records a check result. */
 function check(checks: Check[], name: string, ok: boolean, detail = ''): void {
 	checks.push({ name, ok, detail });
@@ -166,6 +176,74 @@ async function main(): Promise<number> {
 			checks,
 			'group selected',
 			(await page.textContent('[data-testid="status-badge"]')) !== null,
+		);
+
+		// Grouping by request is on by default. Check it here, open one request, and
+		// then turn it off so the line-level checks below look at individual lines -
+		// a request's lines are hidden until its row is opened.
+		let requests = 0;
+		try {
+			await page.waitForSelector('[data-testid="log-request-group"]', { timeout: options.timeout });
+			requests = await page.locator('[data-testid="log-request-group"]').count();
+		} catch {
+			requests = 0;
+		}
+		check(checks, 'requests are grouped', requests > 0, `${requests} requests`);
+		if (requests > 0) {
+			await page.locator('[data-testid="request-group-summary"]').first().click();
+			const children = await page
+				.locator('[data-testid="log-line"][data-request-child="true"]')
+				.count();
+			check(checks, 'a request opens to show its lines', children > 0, `${children} lines`);
+			await page.locator('[data-testid="request-group-summary"]').first().click();
+			await page.click('[data-testid="group-toggle"]');
+			const grouped = await page.getAttribute('[data-testid="group-toggle"]', 'aria-pressed');
+			check(checks, 'grouping can be turned off', grouped === 'false', String(grouped));
+		}
+
+		/**
+		 * Hover a chart mark and read the tooltip's computed colours.
+		 *
+		 * layerchart's own tooltip background comes from CSS variables that only its
+		 * framework presets (shadcn-svelte, Skeleton, daisyUI) define; this app uses
+		 * none of them, so the tooltip used to render fully transparent with black
+		 * text. Only a real browser can see that, which is why the check lives here.
+		 */
+		async function hoverTooltip(): Promise<{ background: string; color: string } | null> {
+			try {
+				await page.waitForSelector('[data-testid="scatter-chart"] svg circle', {
+					timeout: options.timeout,
+				});
+			} catch {
+				return null;
+			}
+			const circles = page.locator('[data-testid="scatter-chart"] svg circle');
+			const count = Math.min(await circles.count(), 40);
+			for (let index = 0; index < count; index += 1) {
+				const box = await circles.nth(index).boundingBox();
+				if (box === null) continue;
+				await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+				await page.waitForTimeout(60);
+				if ((await page.locator('.lc-tooltip-container').count()) === 0) continue;
+				return await page
+					.locator('.lc-tooltip-container')
+					.first()
+					.evaluate((el) => {
+						const style = getComputedStyle(el);
+						return { background: style.backgroundColor, color: style.color };
+					});
+			}
+			return null;
+		}
+
+		const tooltip = await hoverTooltip();
+		check(
+			checks,
+			'chart tooltip has a background',
+			tooltip === null ? true : painted(tooltip.background) && painted(tooltip.color),
+			tooltip === null
+				? 'no chart points to hover'
+				: `background=${tooltip.background} text=${tooltip.color}`,
 		);
 
 		let lines = 0;

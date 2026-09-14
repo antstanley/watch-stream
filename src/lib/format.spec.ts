@@ -6,6 +6,7 @@ import {
 	emulatorLabel,
 	formatBytes,
 	formatCount,
+	formatSpan,
 	formatTime,
 	formatTimestamp,
 } from './format';
@@ -106,5 +107,32 @@ describe('describeEndpoint', () => {
 	it('returns null for real AWS', () => {
 		expect(describeEndpoint(null)).toBeNull();
 		expect(describeEndpoint('')).toBeNull();
+	});
+});
+
+describe('formatSpan', () => {
+	it('reports sub-second spans in milliseconds', () => {
+		expect(formatSpan(0)).toBe('0ms');
+		expect(formatSpan(250)).toBe('250ms');
+		expect(formatSpan(999)).toBe('999ms');
+	});
+
+	it('reports short spans in seconds', () => {
+		expect(formatSpan(1_000)).toBe('1s');
+		expect(formatSpan(1_250)).toBe('1.3s');
+		expect(formatSpan(59_400)).toBe('59.4s');
+	});
+
+	it('reports longer spans in minutes and hours', () => {
+		expect(formatSpan(60_000)).toBe('1m');
+		expect(formatSpan(125_000)).toBe('2m 5s');
+		expect(formatSpan(3_600_000)).toBe('1h');
+		expect(formatSpan(3_900_000)).toBe('1h 5m');
+	});
+
+	it('reports a missing or negative span as unknown', () => {
+		expect(formatSpan(null)).toBe(EMPTY_VALUE);
+		expect(formatSpan(Number.NaN)).toBe(EMPTY_VALUE);
+		expect(formatSpan(-5)).toBe(EMPTY_VALUE);
 	});
 });

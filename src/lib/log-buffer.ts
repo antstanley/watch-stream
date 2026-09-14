@@ -117,6 +117,140 @@ function declaredLevel(message: string): LogLevel | null {
 }
 
 /**
+ * Severity ranks, highest first, with `unknown` below every real level.
+ *
+ * One ordered table feeds the JavaScript helpers and the SQL the archive runs,
+ * so "most critical" means exactly the same thing in the chart, in the log view
+ * and in DuckDB. Insertion order is severity order.
+ */
+export const LEVEL_RANK: Record<LogLevel | 'unknown', number> = {
+	error: 4,
+	warn: 3,
+	info: 2,
+	debug: 1,
+	unknown: 0,
+};
+
+/** Rank of a level; a missing level ranks as `unknown`. */
+export function levelRank(level: LogLevel | 'unknown' | null | undefined): number {
+	return level === null || level === undefined ? LEVEL_RANK.unknown : LEVEL_RANK[level];
+}
+
+/**
+ * Worst level in a set of levels, or `null` when none of them has a level.
+ *
+ * This is what a request id group is coloured by: a group with one error line
+ * and twenty info lines is an error, because that is what a reader needs to see.
+ */
+export function mostCriticalLevel(
+	levels: Iterable<LogLevel | 'unknown' | null | undefined>,
+): LogLevel | null {
+	let best: LogLevel | null = null;
+	let bestRank = -1;
+	for (const level of levels) {
+		if (level === null || level === undefined || level === 'unknown') continue;
+		const rank = LEVEL_RANK[level];
+		if (rank > bestRank) {
+			bestRank = rank;
+			best = level;
+		}
+	}
+	return best;
+}
+
+/**
+ * Payload keys checked, in order, for a request id the producer declared.
+ *
+ * The list is deliberately about the *request*: a trace id, a session id or a
+ * tenant id names something else and must not collapse unrelated lines.
+ */
+export const REQUEST_ID_KEYS = [
+	'requestId',
+	'request_id',
+	'requestID',
+	'reqId',
+	'req_id',
+	'awsRequestId',
+	'aws_request_id',
+	'xRequestId',
+	'x_request_id',
+	'x-request-id',
+	'X-Request-Id',
+] as const;
+
+/** Values that look like an id but mean "there is none". */
+const REQUEST_ID_PLACEHOLDERS = new Set([
+	'none',
+	'null',
+	'undefined',
+	'n/a',
+	'na',
+	'unknown',
+	'test',
+	'-',
+	'{{requestid}}',
+	'${requestid}',
+]);
+
+/** Shortest value treated as a request id, so `id: 1` is not a grouping key. */
+const REQUEST_ID_MIN_LENGTH = 4;
+
+/** Characters a request id is made of; anything with a space is not an id. */
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:=-]*$/;
+
+/**
+ * `RequestId: 1234-abcd`, `request_id=abc.def`, `x-request-id: 8f2c`: the
+ * separators and the casing both vary, so one pattern covers them.
+ *
+ * A bare UUID is deliberately *not* matched. Plenty of log lines carry a
+ * correlation id, a span id or an uploaded file's id, and grouping by one of
+ * those would invent requests that never existed.
+ */
+const REQUEST_ID_TEXT = /\brequest[\s_-]?id\b\s*[:=]\s*"?([A-Za-z0-9][A-Za-z0-9._:=-]*)"?/i;
+
+/** Trims trailing punctuation a sentence adds after an id. */
+function cleanRequestId(value: string): string | null {
+	const trimmed = value.replace(/[.,;:]+$/, '').trim();
+	if (trimmed.length < REQUEST_ID_MIN_LENGTH) return null;
+	if (REQUEST_ID_PLACEHOLDERS.has(trimmed.toLowerCase())) return null;
+	return REQUEST_ID_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+/** Request id the payload declares, when the line carries a JSON object. */
+function declaredRequestId(message: string): string | null {
+	const payload = findJsonInMessage(message);
+	if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null;
+	const record = payload as Record<string, unknown>;
+	for (const key of REQUEST_ID_KEYS) {
+		const value = record[key];
+		if (typeof value === 'string') {
+			const cleaned = cleanRequestId(value);
+			if (cleaned !== null) return cleaned;
+		}
+		// Numbers are legitimate ids in some frameworks, and never placeholders.
+		if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+	}
+	return null;
+}
+
+/**
+ * Detects the request id of a log line, or returns `null` when it has none.
+ *
+ * A declared payload key wins; the text form is the fallback for the many logs
+ * that print their id instead of emitting JSON. Both paths return the id
+ * verbatim, because it is an identifier - folding case would merge distinct ids
+ * on the one hand and lie about what the log said on the other.
+ */
+export function detectRequestId(message: string): string | null {
+	const text = message ?? '';
+	if (text === '') return null;
+	const declared = declaredRequestId(text);
+	if (declared !== null) return declared;
+	const match = REQUEST_ID_TEXT.exec(text);
+	return match === null ? null : cleanRequestId(match[1] ?? '');
+}
+
+/**
  * Detects the severity of a log line.
  *
  * A level the payload declares wins, because it is a statement of fact; the

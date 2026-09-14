@@ -2,19 +2,30 @@ import { describe, expect, test } from 'vitest';
 import {
 	ARCHIVE_INSERT_CHUNK,
 	ARCHIVE_INSERT_COLUMNS,
+	ARCHIVE_MAX_SEQ_SQL,
 	ARCHIVE_SCHEMA,
 	ARCHIVE_TOTALS_SQL,
 	archiveEventKey,
 	buildGroupsQuery,
 	buildInsertSql,
 	buildPageQuery,
+	buildRequestIdBackfillQuery,
+	buildRequestIdBackfillStateQuery,
+	buildRequestIdBackfillStateWrite,
+	buildRequestIdBackfillUpdate,
 	buildSeriesQuery,
 	escapeLike,
+	maxSeqOf,
+	planRequestIdBackfill,
+	rowToBackfillWatermark,
+	rowToMaxSeq,
 	rowToTotals,
+	rowsToBackfillCandidates,
 	rowsToGroups,
 	rowsToPage,
 	rowsToSeries,
 	toArchiveParams,
+	toRequestIdBackfillParams,
 } from './archive-sql';
 import type { LogEventDto } from '$lib/types';
 
@@ -70,6 +81,19 @@ describe('schema', () => {
 				statement.includes('ALTER TABLE log_events ADD COLUMN IF NOT EXISTS level_source VARCHAR'),
 			),
 		).toBe(true);
+		// The request id is created and migrated the same way.
+		expect(ARCHIVE_SCHEMA.some((statement) => statement.includes('request_id VARCHAR'))).toBe(true);
+		expect(
+			ARCHIVE_SCHEMA.some((statement) =>
+				statement.includes('ALTER TABLE log_events ADD COLUMN IF NOT EXISTS request_id VARCHAR'),
+			),
+		).toBe(true);
+		// The file remembers its own migrations in a small key/value table.
+		expect(
+			ARCHIVE_SCHEMA.some((statement) =>
+				statement.includes('CREATE TABLE IF NOT EXISTS archive_meta (key VARCHAR PRIMARY KEY'),
+			),
+		).toBe(true);
 	});
 });
 
@@ -96,7 +120,11 @@ describe('buildInsertSql', () => {
 describe('toArchiveParams', () => {
 	test('flattens events in column order with bigint timestamps', () => {
 		const params = toArchiveParams(REGION, GROUP, [
-			event({ streamName: 's-1', ingestionTime: TS + 5 }),
+			event({
+				streamName: 's-1',
+				ingestionTime: TS + 5,
+				message: 'done RequestId: 1a2b3c4d',
+			}),
 		]);
 		expect(params).toEqual([
 			REGION,
@@ -106,11 +134,27 @@ describe('toArchiveParams', () => {
 			'evt-1',
 			BigInt(TS),
 			BigInt(TS + 5),
-			'hello',
+			'done RequestId: 1a2b3c4d',
 			null,
 			null,
+			'1a2b3c4d',
 		]);
 		expect(params).toHaveLength(ARCHIVE_INSERT_COLUMNS.length);
+		expect(ARCHIVE_INSERT_COLUMNS.at(-1)).toBe('request_id');
+	});
+
+	test('detects a declared request id as well as a printed one', () => {
+		const declared = toArchiveParams(REGION, GROUP, [
+			event({ message: '{"request_id":"req-9f2c","msg":"ok"}' }),
+		]);
+		expect(declared.at(-1)).toBe('req-9f2c');
+	});
+
+	test('stores NULL, never an empty string, when a line has no request id', () => {
+		expect(toArchiveParams(REGION, GROUP, [event({ message: 'hello' })]).at(-1)).toBeNull();
+		// A value too short to be an id is not one either, so the column cannot hold
+		// "" or a stray character by accident.
+		expect(toArchiveParams(REGION, GROUP, [event({ message: 'RequestId: ab' })]).at(-1)).toBeNull();
 	});
 
 	test('binds null for fields CloudWatch omits', () => {
@@ -121,6 +165,7 @@ describe('toArchiveParams', () => {
 		expect(params[6]).toBeNull();
 		expect(params[8]).toBeNull();
 		expect(params[9]).toBeNull();
+		expect(params[10]).toBeNull();
 	});
 
 	test('flattens several events in one list', () => {
@@ -228,6 +273,7 @@ describe('rowsToPage', () => {
 				event_key: 'evt-1',
 				ingestion_time_ms: BigInt(TS + 1),
 				level: 'error',
+				request_id: 'req-9f2c',
 			},
 			{ timestamp_ms: TS + 5, seq: 8, message: 'second', log_stream: null, event_key: null },
 		]);
@@ -239,6 +285,7 @@ describe('rowsToPage', () => {
 				streamName: '/stream/one',
 				ingestionTime: TS + 1,
 				level: 'error',
+				requestId: 'req-9f2c',
 			},
 			{ id: null, timestamp: TS + 5, message: 'second', level: null },
 		]);
@@ -278,6 +325,25 @@ describe('rowsToPage', () => {
 			limit: 10,
 		});
 		expect(sql).not.toContain('level IN');
+	});
+
+	test('sends a stored request id only when there is one', () => {
+		const page = rowsToPage([
+			{ timestamp_ms: TS, seq: 1, message: 'grouped', request_id: 'req-1' },
+			// A row written before the column existed: NULL is not a verdict, because
+			// the client can still detect an id in the message it renders.
+			{ timestamp_ms: TS, seq: 2, message: 'legacy', request_id: null },
+			{ timestamp_ms: TS, seq: 3, message: 'empty', request_id: '' },
+			{ timestamp_ms: TS, seq: 4, message: 'missing' },
+		]);
+		expect(page.events.map((entry) => entry.requestId)).toEqual([
+			'req-1',
+			undefined,
+			undefined,
+			undefined,
+		]);
+		expect('requestId' in (page.events[1] as LogEventDto)).toBe(false);
+		expect(page.events.every((entry) => entry.level === null)).toBe(true);
 	});
 
 	test('maps an unknown or missing stored level to null', () => {
@@ -404,5 +470,171 @@ describe('totals and groups', () => {
 			{ t: TS, group: GROUP, level: 'error', events: 4 },
 			{ t: TS + 10_000, group: GROUP, level: 'unknown', events: 2 },
 		]);
+	});
+});
+
+describe('request-id backfill', () => {
+	test('scans the rows written before the column existed, up to a ceiling', () => {
+		const { sql, params } = buildRequestIdBackfillQuery({ maxSeq: 42, limit: 100 });
+		expect(sql).toContain(
+			'SELECT event_key, log_group, region, message, seq FROM log_events WHERE seq <= ? AND request_id IS NULL ORDER BY seq LIMIT ?',
+		);
+		expect(params).toEqual([BigInt(42), BigInt(100)]);
+	});
+
+	test('skips the range a previous pass already scanned', () => {
+		const { sql, params } = buildRequestIdBackfillQuery({ maxSeq: 42, afterSeq: 7, limit: 5 });
+		expect(sql).toContain('WHERE seq <= ? AND seq > ? AND request_id IS NULL');
+		// The ceiling binds first, then the watermark, then the row budget.
+		expect(params).toEqual([BigInt(42), BigInt(7), BigInt(5)]);
+	});
+
+	test('treats a zero watermark as "scan from the start"', () => {
+		const { sql, params } = buildRequestIdBackfillQuery({ maxSeq: 3, afterSeq: 0, limit: 1 });
+		expect(sql).not.toContain('seq > ?');
+		expect(params).toEqual([BigInt(3), BigInt(1)]);
+	});
+
+	test('reads the ceiling and the stored watermark', () => {
+		expect(ARCHIVE_MAX_SEQ_SQL).toBe('SELECT max(seq) AS maxSeq FROM log_events');
+		expect(rowToMaxSeq({ maxSeq: BigInt(9) })).toBe(9);
+		expect(rowToMaxSeq({ maxSeq: null })).toBeNull();
+		expect(rowToMaxSeq(undefined)).toBeNull();
+		expect(buildRequestIdBackfillStateQuery()).toContain(
+			"SELECT value FROM archive_meta WHERE key = 'request_id_backfill'",
+		);
+		expect(buildRequestIdBackfillStateWrite()).toContain(
+			"INSERT OR REPLACE INTO archive_meta (key, value) VALUES ('request_id_backfill', ?)",
+		);
+	});
+
+	test('reads the watermark, and treats junk as "never scanned"', () => {
+		expect(rowToBackfillWatermark({ value: '12' })).toBe(12);
+		expect(rowToBackfillWatermark({ value: BigInt(12) })).toBe(12);
+		expect(rowToBackfillWatermark({ value: null })).toBeNull();
+		expect(rowToBackfillWatermark({ value: 'later' })).toBeNull();
+		expect(rowToBackfillWatermark(undefined)).toBeNull();
+	});
+
+	test('maps candidate rows, dropping unusable ones and reporting the last seq', () => {
+		const candidates = rowsToBackfillCandidates([
+			{
+				event_key: 'k1',
+				region: 'r',
+				log_group: '/a',
+				message: 'RequestId: 1a2b3c4d',
+				seq: BigInt(3),
+			},
+			{ event_key: null, region: 'r', log_group: '/a', message: 'msg', seq: 4 },
+			{ event_key: 'k2', region: 'r', log_group: '/a', message: 'msg', seq: null },
+		]);
+		expect(candidates).toEqual([
+			{ seq: 3, region: 'r', logGroup: '/a', eventKey: 'k1', message: 'RequestId: 1a2b3c4d' },
+		]);
+		expect(maxSeqOf(candidates)).toBe(3);
+		expect(maxSeqOf([])).toBeNull();
+	});
+
+	test('plans an update only for the messages that yield an id', () => {
+		const updates = planRequestIdBackfill([
+			{ seq: 1, region: 'r', logGroup: '/a', eventKey: 'k1', message: 'RequestId: 1a2b3c4d' },
+			{ seq: 2, region: 'r', logGroup: '/a', eventKey: 'k2', message: 'no id in this line' },
+			{ seq: 3, region: 'r', logGroup: '/a', eventKey: 'k3', message: '{"requestId":"req-9f2c"}' },
+		]);
+		// A message with no id is left alone: NULL is the answer for that row, and the
+		// watermark moves past it so it is not looked at again.
+		expect(updates).toEqual([
+			{ region: 'r', logGroup: '/a', eventKey: 'k1', requestId: '1a2b3c4d' },
+			{ region: 'r', logGroup: '/a', eventKey: 'k3', requestId: 'req-9f2c' },
+		]);
+	});
+
+	test('writes many ids in one statement, keyed by the unique index', () => {
+		const sql = buildRequestIdBackfillUpdate(2);
+		expect(sql.startsWith('UPDATE log_events SET request_id = v.request_id FROM (VALUES ')).toBe(
+			true,
+		);
+		expect(sql).toContain('AS v(region, log_group, event_key, request_id)');
+		expect(sql).toContain('log_events.region = v.region AND log_events.log_group = v.log_group');
+		expect(sql.match(/\(\?, \?, \?, \?\)/g)).toHaveLength(2);
+		expect(() => buildRequestIdBackfillUpdate(0)).toThrow(RangeError);
+		expect(() => buildRequestIdBackfillUpdate(1.5)).toThrow(RangeError);
+		expect(
+			toRequestIdBackfillParams([
+				{ region: 'r', logGroup: '/a', eventKey: 'k1', requestId: 'id-1' },
+			]),
+		).toEqual(['r', '/a', 'k1', 'id-1']);
+	});
+});
+
+describe('request-mode series', () => {
+	test('counts one mark per request, at its first line, coloured by its worst level', () => {
+		const { sql, params } = buildSeriesQuery({
+			region: REGION,
+			logGroups: [GROUP],
+			startTime: TS,
+			endTime: TS + 60_000,
+			bucketMs: 10_000,
+			by: 'request',
+		});
+		expect(sql).toContain(
+			'SELECT coalesce(request_id, event_key) AS request_key, log_group, min(timestamp_ms) AS start_ms',
+		);
+		expect(sql).toContain('GROUP BY request_key, log_group)');
+		expect(sql).toContain(
+			"max(CASE coalesce(level, 'unknown') WHEN 'error' THEN 4 WHEN 'warn' THEN 3 WHEN 'info' THEN 2 WHEN 'debug' THEN 1 ELSE 0 END) AS level_rank",
+		);
+		expect(sql).toContain(
+			"SELECT CAST(floor(start_ms / ?) * ? AS BIGINT) AS bucket, log_group, CASE level_rank WHEN 4 THEN 'error' WHEN 3 THEN 'warn' WHEN 2 THEN 'info' WHEN 1 THEN 'debug' ELSE 'unknown' END AS level, count(*) AS events",
+		);
+		expect(sql).not.toContain('HAVING');
+		// Bind order follows the statement text: the CTE comes first, so its scope
+		// parameters come first and the bucket width comes LAST - the opposite of the
+		// event form, which binds the bucket width first.
+		expect(params).toEqual([
+			REGION,
+			GROUP,
+			BigInt(TS),
+			BigInt(TS + 60_000),
+			BigInt(10_000),
+			BigInt(10_000),
+		]);
+	});
+
+	test('selects a request by its worst level, binding the ranks', () => {
+		const { sql, params } = buildSeriesQuery({
+			region: REGION,
+			logGroups: [GROUP, '/other'],
+			startTime: TS,
+			endTime: TS + 60_000,
+			bucketMs: 1_000,
+			levels: ['error', 'debug'],
+			by: 'request',
+		});
+		expect(sql).toContain('HAVING level_rank IN (?, ?)');
+		expect(sql).not.toContain('level IN (');
+		expect(params).toEqual([
+			REGION,
+			GROUP,
+			'/other',
+			BigInt(TS),
+			BigInt(TS + 60_000),
+			4,
+			1,
+			BigInt(1_000),
+			BigInt(1_000),
+		]);
+	});
+
+	test('keeps the event form when by is event or absent', () => {
+		const base = {
+			region: REGION,
+			logGroups: [GROUP],
+			startTime: TS,
+			endTime: TS,
+			bucketMs: 1_000,
+		};
+		expect(buildSeriesQuery({ ...base, by: 'event' })).toEqual(buildSeriesQuery(base));
+		expect(buildSeriesQuery(base).params[0]).toBe(BigInt(1_000));
 	});
 });

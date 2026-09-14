@@ -1,11 +1,12 @@
 /**
- * Level handling for the stream route.
+ * Detection for the stream route: the `level` parameter, and the fields the
+ * archive stores.
  *
  * SvelteKit only allows HTTP method exports from a `+server.ts`, so the helpers
- * live here: parsing the `level` parameter, and tagging live events with the
- * level the archive will store.
+ * live here: parsing the `level` parameter, and tagging outgoing events with the
+ * level and the request id that the archive will store for them.
  */
-import { detectLevel, isLogLevel, type LogLevel } from '$lib/log-buffer';
+import { detectLevel, detectRequestId, isLogLevel, type LogLevel } from '$lib/log-buffer';
 import type { LogEventDto } from '$lib/types';
 
 /** Message used when `level` cannot be understood, or when it is misapplied. */
@@ -34,15 +35,28 @@ export function parseLevelParam(value: string | null | undefined): LogLevel[] | 
 }
 
 /**
- * Adds the detected level to events that do not carry one.
+ * Fills in the fields the archive stores for an event: its level and its request
+ * id.
  *
- * A live CloudWatch event has no level, so the server detects it here and the UI
- * and the archive agree. An event read back from the archive already carries the
- * level that was stored - including `null` for "no signal" - and that value is
- * kept, because re-guessing it would contradict the database.
+ * This is where a live CloudWatch event gets what the archive will hold, so the
+ * UI, the chart and the database all describe the same line the same way. It runs
+ * for every batch, whatever the source, because the two fields are decided one
+ * by one:
+ *
+ * - `level` is only detected when the event does not already carry one. A row
+ *   replayed from the archive has the level that was stored, including an
+ *   explicit `null` for "no signal", and re-guessing it would contradict the
+ *   database.
+ * - `requestId` is only detected when it is absent. An explicit `null` from the
+ *   archive stays `null`, since that is what the row says; a row written before
+ *   the column existed has no property at all and is detected here.
  */
-export function withLevels(events: readonly LogEventDto[]): LogEventDto[] {
-	return events.map((event) =>
-		event.level === undefined ? { ...event, level: detectLevel(event.message) } : event,
-	);
+export function withDetections(events: readonly LogEventDto[]): LogEventDto[] {
+	return events.map((event) => {
+		const level = event.level === undefined ? detectLevel(event.message) : event.level;
+		const requestId =
+			event.requestId === undefined ? detectRequestId(event.message) : event.requestId;
+		if (level === event.level && requestId === event.requestId) return event;
+		return { ...event, level, requestId };
+	});
 }

@@ -76,6 +76,13 @@
 	let selectedGroup = $derived(selectedGroups[0] ?? null);
 	/** Level filter shared by the log view and the chart. */
 	let levelFilter = $state<LogLevel | null>(null);
+	/**
+	 * Group lines by request id, in the log view and in the chart.
+	 *
+	 * On by default: an incident is read as requests, not as the lines they wrote.
+	 * A stored preference wins, so a reader who wants every line keeps every line.
+	 */
+	let groupRequests = $state(true);
 	/** Bucketed counts behind the chart. */
 	let seriesPoints = $state<SeriesPoint[]>([]);
 	/** True while the archive counts are being fetched. */
@@ -124,6 +131,7 @@
 	}
 
 	onMount(() => {
+		groupRequests = readPref(STORAGE_KEYS.groupRequests) !== 'false';
 		void bootstrap();
 		const clampToViewport = (): void => {
 			viewportWidth = window.innerWidth;
@@ -336,6 +344,16 @@
 		applyRange({ mode: 'historic', range: '', from: selection.from, to: selection.to });
 	}
 
+	/** Turns request grouping on or off, and remembers the choice. */
+	function toggleGroupRequests(): void {
+		groupRequests = !groupRequests;
+		try {
+			localStorage?.setItem(STORAGE_KEYS.groupRequests, groupRequests ? 'true' : 'false');
+		} catch {
+			// A preference is best effort: private mode, quota, no storage.
+		}
+	}
+
 	/** Clears the chart's brush and the window it applied. */
 	function clearBrush(): void {
 		scatter?.reset();
@@ -454,6 +472,7 @@
 			windowFrom ?? '',
 			windowTo ?? '',
 			levelFilter ?? '',
+			groupRequests ? 'request' : 'event',
 			stream.receivedCount,
 			stream.ready?.startTime ?? '',
 			stream.ready?.endTime ?? '',
@@ -521,6 +540,7 @@
 				bucketMs: chartBucketMs(from, to),
 				level: levelFilter,
 				fallbackGroup: selectedGroup ?? '',
+				byRequest: groupRequests,
 			});
 			return;
 		}
@@ -532,6 +552,7 @@
 				from,
 				to,
 				levels: levelFilter === null ? [] : [levelFilter],
+				by: groupRequests ? 'request' : 'event',
 			});
 			seriesPoints = series.points;
 		} catch {
@@ -640,6 +661,7 @@
 			to={chartWindow().to}
 			bucketMs={chartBucketMs(chartWindow().from, chartWindow().to)}
 			groups={selectedGroups}
+			byRequest={groupRequests}
 			loading={seriesLoading}
 			onBrush={applyBrush}
 		/>
@@ -675,6 +697,8 @@
 			groups={selectedGroups}
 			level={levelFilter}
 			onLevelChange={(next) => (levelFilter = next)}
+			{groupRequests}
+			onGroupToggle={toggleGroupRequests}
 			{filter}
 			paused={stream.paused}
 			{autoScroll}

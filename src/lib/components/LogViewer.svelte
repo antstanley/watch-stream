@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import ColumnResizer from './ColumnResizer.svelte';
 	import StatusBadge from './StatusBadge.svelte';
-	import { formatCount, formatTime, formatTimestamp } from '$lib/format';
+	import { formatCount, formatSpan, formatTime, formatTimestamp } from '$lib/format';
 	import { describeArchive, describeStreamError } from '$lib/groups-client';
 	import {
 		detectLevel,
@@ -15,11 +15,15 @@
 	import type { LogLevel } from '$lib/log-buffer';
 	import { findJsonInMessage, formatLogMessage, tokenizeJson } from '$lib/log-format';
 	import type { JsonToken } from '$lib/log-format';
+	import { requestRows } from '$lib/request-groups';
+	import type { RequestRow } from '$lib/request-groups';
 	import { PREFIX_WIDTH, STORAGE_KEYS, parseStoredWidth, pxToRem, remToPx } from '$lib/resize';
+	import { LEVEL_LABELS } from '$lib/series-buckets';
 	import { describeWindow } from '$lib/time-range';
 	import type { LogMode } from '$lib/time-range';
 	import type {
 		LogEventDto,
+		SeriesLevel,
 		StreamErrorPayload,
 		StreamReadyPayload,
 		StreamState,
@@ -66,6 +70,13 @@
 		level?: LogLevel | null;
 		/** Called when the level filter changes while it is controlled. */
 		onLevelChange?: (level: LogLevel | null) => void;
+		/**
+		 * Group lines that share a request id into one row, opened on demand. On by
+		 * default, and owned by the page so the chart counts the same requests.
+		 */
+		groupRequests?: boolean;
+		/** Called when the grouping toggle is pressed. */
+		onGroupToggle?: () => void;
 		onFilterChange?: (value: string) => void;
 		onPauseToggle?: () => void;
 		onClear?: () => void;
@@ -91,6 +102,8 @@
 		groups = [],
 		level = undefined,
 		onLevelChange,
+		groupRequests = true,
+		onGroupToggle,
 		onFilterChange,
 		onPauseToggle,
 		onClear,
@@ -206,8 +219,8 @@
 		}
 		return counts;
 	});
-	/** Presentation rows for the visible lines. */
-	let rows: Row[] = $derived(
+	/** Presentation rows for the visible lines, one per line in buffer order. */
+	let lineRows: Row[] = $derived(
 		visible.map((event, index) => {
 			// The server's detection is authoritative when it is present: it is the
 			// same value the archive stored. Events without it (older payloads, tests)
@@ -237,12 +250,124 @@
 		}),
 	);
 
+	/**
+	 * One row of the list: a line, or a request that holds its lines.
+	 *
+	 * A request row carries everything the header shows, so the template stays
+	 * declarative and the list never re-formats a line it already formatted.
+	 */
+	type DisplayRow =
+		| ({ kind: 'line' } & Row)
+		| {
+				kind: 'request';
+				key: string;
+				/** Request id every line in the group carries. */
+				id: string;
+				/** Clock time of the first line, and its full timestamp for the tooltip. */
+				time: string;
+				timestamp: string;
+				/** Number of lines in the group. */
+				count: number;
+				/** First to last line, as `1.2s`. */
+				span: string;
+				/** Most critical level in the group. */
+				level: SeriesLevel;
+				levelLabel: string;
+				levelClass: string;
+				/** Log group and stream, when every line in the request shares them. */
+				group: string | null;
+				streamName: string | null;
+				/** Worst line, trimmed to one short line for the collapsed row. */
+				preview: string;
+				children: Row[];
+		  };
+
+	/** Longest preview kept for a collapsed request, in characters. */
+	const PREVIEW_LENGTH = 160;
+
+	/** Prefixes a formatted line row with its kind. */
+	function asLine(row: Row): DisplayRow {
+		return { kind: 'line', ...row };
+	}
+
+	/** Builds the request header row from the lines it holds. */
+	function requestDisplayRow(row: Extract<RequestRow, { kind: 'request' }>): DisplayRow {
+		const children = row.request.events
+			.map((entry) => lineRows[entry.index])
+			.filter((child): child is Row => child !== undefined);
+		const worstLevel = row.request.level;
+		const first = children[0];
+		return {
+			kind: 'request',
+			key: row.key,
+			id: row.request.id,
+			time: first?.time ?? '',
+			timestamp: first?.timestamp ?? '',
+			count: children.length,
+			span: formatSpan(row.request.last - row.request.first),
+			level: worstLevel,
+			levelLabel: LEVEL_LABELS[worstLevel],
+			levelClass: levelColorClass(worstLevel === 'unknown' ? null : worstLevel),
+			group: sharedField(children.map((child) => child.group)),
+			streamName: sharedField(children.map((child) => child.streamName)),
+			preview: requestPreview(row.request),
+			children,
+		};
+	}
+
+	/** The value every entry shares, or `null` when they differ. */
+	function sharedField(values: readonly (string | null | undefined)[]): string | null {
+		const first = values[0];
+		if (first === null || first === undefined) return null;
+		return values.every((value) => value === first) ? first : null;
+	}
+
+	/**
+	 * One short line for a collapsed request: its most critical line, because that
+	 * is the line that explains why the request is coloured the way it is.
+	 */
+	function requestPreview(request: Extract<RequestRow, { kind: 'request' }>['request']): string {
+		const worst =
+			request.events.find(
+				(entry) => effectiveLevel(visible[entry.index] ?? { message: '' }) === request.level,
+			) ?? request.events[0];
+		const message = visible[worst?.index ?? -1]?.message ?? '';
+		const [firstLine = ''] = message.split('\n');
+		return firstLine.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_LENGTH);
+	}
+
+	/** Rows the list renders: grouped by request when the preference is on. */
+	let displayRows: DisplayRow[] = $derived.by(() => {
+		if (!groupRequests) return lineRows.map(asLine);
+		const rows: DisplayRow[] = [];
+		for (const row of requestRows(visible)) {
+			if (row.kind === 'line') {
+				rows.push(asLine(lineRows[row.index] as Row));
+				continue;
+			}
+			// A request with a single line reads better as that line: there is
+			// nothing to expand and nothing the header could add.
+			if (row.request.events.length === 1) {
+				const only = lineRows[row.request.events[0]?.index ?? -1];
+				if (only !== undefined) rows.push(asLine(only));
+				continue;
+			}
+			rows.push(requestDisplayRow(row));
+		}
+		return rows;
+	});
+
+	/** True when the list is showing request rows. */
+	let grouped = $derived(displayRows.some((row) => row.kind === 'request'));
+	/** Requests in view, shown next to the line count while grouping. */
+	let requestCount = $derived(displayRows.filter((row) => row.kind === 'request').length);
+
 	let scroller: HTMLElement | null = $state(null);
 
 	/** Keeps the newest line in view while auto-scroll is on (vertical only). */
 	$effect(() => {
 		// Reading the row count keeps this effect in sync with every appended batch.
-		const total = rows.length;
+		const total = displayRows.length;
 		if (!autoScroll || scroller === null || total === 0) return;
 		scroller.scrollTop = scroller.scrollHeight;
 	});
@@ -284,6 +409,8 @@
 	let wrapTone = $derived(wrapLines ? 'text-sky-300' : 'text-neutral-400');
 	/** JSON toggle colour. */
 	let jsonTone = $derived(jsonView ? 'text-sky-300' : 'text-neutral-400');
+	/** Grouping toggle colour. */
+	let groupTone = $derived(groupRequests ? 'text-sky-300' : 'text-neutral-400');
 	/** Rows fill the window when wrapping, and grow to their content otherwise. */
 	let listClass = $derived(wrapLines ? 'w-full' : 'w-max min-w-full');
 	/** Message cell: wrapped text or a single long line that scrolls sideways. */
@@ -368,6 +495,11 @@
 		<span class="text-xs text-neutral-400" data-testid="visible-count">
 			{formatCount(visible.length)} shown
 		</span>
+		{#if grouped}
+			<span class="text-xs text-neutral-400" data-testid="request-count">
+				{formatCount(requestCount)} requests
+			</span>
+		{/if}
 		<span class="text-xs text-neutral-500" data-testid="received-count">
 			{formatCount(receivedCount)} received
 		</span>
@@ -464,6 +596,16 @@
 			</button>
 			<button
 				type="button"
+				onclick={() => onGroupToggle?.()}
+				aria-pressed={groupRequests}
+				title="Group the lines of one request into a single row, coloured by its most critical line (off: one row per line)"
+				data-testid="group-toggle"
+				class="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs font-medium transition-colors hover:border-neutral-700 {groupTone}"
+			>
+				By request
+			</button>
+			<button
+				type="button"
 				onclick={() => onPauseToggle?.()}
 				aria-pressed={paused}
 				class="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs font-medium text-neutral-300 transition-colors hover:border-neutral-700 hover:text-neutral-100"
@@ -507,7 +649,7 @@
 			<p class="px-3 py-6 text-sm text-neutral-500" data-testid="viewer-idle">
 				Select a log group to start tailing.
 			</p>
-		{:else if rows.length === 0}
+		{:else if displayRows.length === 0}
 			<p class="px-3 py-6 text-sm text-neutral-500" data-testid="viewer-empty">
 				{emptyText}
 			</p>
@@ -515,7 +657,9 @@
 			<!-- The handle lives inside the scrolled content so it stays on the column edge. -->
 			<div class="relative min-h-full {listClass}" data-testid="log-canvas">
 				<ol class="font-mono text-xs leading-5" data-testid="log-lines">
-					{#each rows as row (row.key)}
+					<!-- One line of the list. A line that belongs to a request is indented and
+					     marked, so an opened request reads as a nested block. -->
+					{#snippet logLine(row: Row, child: boolean)}
 						{@const expandable = row.expandable !== null}
 						{@const open = expandable && isExpanded(row.key)}
 						<!-- Clicking a line that carries JSON opens it; a line without JSON is
@@ -523,10 +667,13 @@
 						<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 						<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 						<li
-							class="flex flex-wrap items-baseline gap-2 px-3 py-0.5 hover:bg-neutral-900/60 {listClass} {expandable
+							class="flex flex-wrap items-baseline gap-2 {child
+								? 'pl-8'
+								: 'px-3'} py-0.5 hover:bg-neutral-900/60 {listClass} {expandable
 								? 'cursor-pointer'
 								: ''}"
 							data-testid="log-line"
+							data-request-child={child ? 'true' : undefined}
 							data-level={row.level ?? 'unknown'}
 							data-expandable={expandable ? 'true' : undefined}
 							data-expanded={open ? 'true' : undefined}
@@ -593,6 +740,91 @@
 								</span>
 							{/if}
 						</li>
+					{/snippet}
+
+					{#each displayRows as row (row.key)}
+						{#if row.kind === 'request'}
+							{@const open = isExpanded(row.key)}
+							<li
+								class={listClass}
+								data-testid="log-request-group"
+								data-request-id={row.id}
+								data-level={row.level}
+								data-expanded={open ? 'true' : undefined}
+								data-lines={row.count}
+							>
+								<button
+									type="button"
+									class="flex w-full flex-wrap items-baseline gap-2 px-3 py-0.5 text-left hover:bg-neutral-900/60"
+									aria-expanded={open}
+									title={open
+										? 'Hide the lines of this request'
+										: 'Show every line of this request'}
+									data-testid="request-group-summary"
+									onclick={() => toggleRow(row.key)}
+								>
+									<span class="w-[7.5rem] shrink-0 text-neutral-500" title={row.timestamp}>
+										{row.time}
+									</span>
+									{#if groups.length > 1}
+										<span
+											class="w-[9rem] shrink-0 truncate text-teal-400/80"
+											title={row.group ?? ''}
+											data-testid="log-group"
+										>
+											{row.group ?? ''}
+										</span>
+									{/if}
+									<span
+										class="shrink-0 truncate text-sky-400/80"
+										style={prefixStyle}
+										title={row.streamName ?? ''}
+										data-testid="log-stream"
+									>
+										{row.streamName ?? ''}
+									</span>
+									<span class="shrink-0 text-neutral-600" aria-hidden="true">
+										{open ? '▾' : '▸'}
+									</span>
+									<span
+										class="shrink-0 rounded border border-neutral-700 bg-neutral-900 px-1.5 font-mono text-[0.6875rem] text-sky-200"
+										data-testid="request-group-id"
+										title="Request id shared by these lines"
+									>
+										{row.id}
+									</span>
+									<span class="shrink-0 text-neutral-400" data-testid="request-group-count">
+										{formatCount(row.count)} lines
+									</span>
+									<span class="shrink-0 text-neutral-500" data-testid="request-group-span">
+										{row.span}
+									</span>
+									<span
+										class="shrink-0 font-medium {row.levelClass}"
+										data-testid="request-group-level"
+									>
+										{row.levelLabel}
+									</span>
+									{#if !open}
+										<span
+											class="min-w-0 truncate text-neutral-500"
+											data-testid="request-group-preview"
+										>
+											{row.preview}
+										</span>
+									{/if}
+								</button>
+								{#if open}
+									<ul class="contents">
+										{#each row.children as child (child.key)}
+											{@render logLine(child, true)}
+										{/each}
+									</ul>
+								{/if}
+							</li>
+						{:else}
+							{@render logLine(row, false)}
+						{/if}
 					{/each}
 				</ol>
 

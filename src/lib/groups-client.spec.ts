@@ -12,6 +12,7 @@ import {
 	fetchHealth,
 	fetchLogGroups,
 	fetchRegions,
+	fetchSeries,
 	isApiErrorBody,
 	noArchivedGroupsMessage,
 	noGroupsMessage,
@@ -19,6 +20,19 @@ import {
 } from './groups-client';
 import type { FetchLike } from './groups-client';
 import type { ArchiveStatusResponse, HealthResponse } from './types';
+
+/** Builds a fake fetch that records the URLs it was asked for. */
+function recordingFetch(body: unknown, urls: string[], status = 200): FetchLike {
+	return (input) => {
+		urls.push(input);
+		return Promise.resolve(
+			new Response(JSON.stringify(body), {
+				status,
+				headers: { 'content-type': 'application/json' },
+			}),
+		);
+	};
+}
 
 /** Builds a fake fetch that returns one JSON body. */
 function stubFetch(body: unknown, status = 200): FetchLike {
@@ -260,5 +274,45 @@ describe('error messages', () => {
 		expect(describeArchive(null)).toBe('Locally archived events instead of live CloudWatch data');
 		expect(describeArchive('   ')).toBe('Locally archived events instead of live CloudWatch data');
 		expect(ARCHIVE_NOTE).toContain('no CloudWatch credentials');
+	});
+});
+
+describe('fetchSeries', () => {
+	it('asks the archive for counts and carries the grouping mode', async () => {
+		const urls: string[] = [];
+		const fetchImpl = recordingFetch(
+			{
+				groupBy: 'request',
+				from: 1,
+				to: 2,
+				bucketMs: 60_000,
+				levels: [],
+				groups: [],
+				points: [],
+				totals: { events: 0, points: 0 },
+			},
+			urls,
+		);
+		const response = await fetchSeries({
+			region: 'us-east-1',
+			groups: ['/aws/app'],
+			from: 1_000,
+			to: 2_000,
+			levels: ['error'],
+			by: 'request',
+			fetchImpl,
+		});
+		expect(response.groupBy).toBe('request');
+		expect(urls[0]).toContain('source=archive');
+		expect(urls[0]).toContain('by=request');
+		expect(urls[0]).toContain('level=error');
+		expect(urls[0]).toContain('groups=%2Faws%2Fapp');
+	});
+
+	it('leaves the grouping mode out when it is not asked for', async () => {
+		const urls: string[] = [];
+		const fetchImpl = recordingFetch({ groupBy: 'event' }, urls);
+		await fetchSeries({ region: 'us-east-1', groups: ['/aws/app'], from: 1, to: 2, fetchImpl });
+		expect(urls[0]).not.toContain('by=');
 	});
 });

@@ -6,15 +6,23 @@ import { readEnv } from '$lib/server/env';
 import { resolveWindow } from '$lib/server/filter';
 import { parseGroupParams } from '$lib/server/group-params';
 import { LEVEL_PARAM_HINT, parseLevelParam } from '$lib/server/level-filter';
-import { SERIES_SOURCE_HINT, parseBucketParam, readSeries } from '$lib/server/series';
+import {
+	GROUP_BY_PARAM_HINT,
+	SERIES_SOURCE_HINT,
+	parseBucketParam,
+	parseGroupByParam,
+	readSeries,
+} from '$lib/server/series';
 import { SOURCE_PARAM_HINT, parseSourceParam } from '$lib/server/source';
 
 /**
- * `GET /api/series` - event counts per time bucket, per group and level.
+ * `GET /api/series` - counts per time bucket, per group and level.
  *
  * This is the chart's data. Only the archive can answer it: DuckDB counts a
  * whole window in one statement, while CloudWatch Logs has no aggregate API, so
  * the UI buckets the events it already streamed for a live or CloudWatch view.
+ * `by=request` counts requests instead of lines, placing each request at its
+ * first line and colouring it by its most critical level.
  *
  * The window is not clamped to CloudWatch's 14 days, because the archive keeps
  * what CloudWatch has already dropped.
@@ -32,6 +40,9 @@ export const GET = async ({ url }: RequestEvent): Promise<Response> => {
 
 	const levels = parseLevelParam(url.searchParams.get('level'));
 	if (levels === undefined) return apiError(400, LEVEL_PARAM_HINT, 'invalid-level');
+
+	const by = parseGroupByParam(url.searchParams.get('by'));
+	if (by === undefined) return apiError(400, GROUP_BY_PARAM_HINT, 'invalid-group-by');
 
 	const env = readEnv();
 	const config = resolveAwsConfig(env, parsedRegion.region);
@@ -65,6 +76,7 @@ export const GET = async ({ url }: RequestEvent): Promise<Response> => {
 		from: window.startTime,
 		to: endTime,
 		levels,
+		by,
 		bucketMs: parseBucketParam(url.searchParams.get('bucket')),
 	});
 	// An unavailable archive answers an empty series: the chart says "nothing

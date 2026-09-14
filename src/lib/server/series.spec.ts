@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import {
 	BUCKET_LADDER,
+	GROUP_BY_PARAM_HINT,
 	MAX_BUCKET_MS,
 	MIN_BUCKET_MS,
 	TARGET_BUCKETS,
 	buildSeriesResponse,
 	chooseBucketMs,
 	parseBucketParam,
+	parseGroupByParam,
 	readSeries,
 	summariseGroups,
 	summariseLevels,
@@ -72,6 +74,26 @@ describe('parseBucketParam', () => {
 	});
 });
 
+describe('parseGroupByParam', () => {
+	test('treats an absent or blank value as the default grouping', () => {
+		expect(parseGroupByParam(null)).toBeNull();
+		expect(parseGroupByParam(undefined)).toBeNull();
+		expect(parseGroupByParam('   ')).toBeNull();
+	});
+
+	test('reads the two groupings this app can answer', () => {
+		expect(parseGroupByParam('event')).toBe('event');
+		expect(parseGroupByParam('request')).toBe('request');
+		expect(parseGroupByParam(' Request ')).toBe('request');
+	});
+
+	test('reports an unknown grouping instead of ignoring it', () => {
+		expect(parseGroupByParam('session')).toBeUndefined();
+		expect(parseGroupByParam('requests')).toBeUndefined();
+		expect(GROUP_BY_PARAM_HINT).toContain('"event" or "request"');
+	});
+});
+
 describe('summaries', () => {
 	const points: SeriesPoint[] = [
 		{ t: TS, group: '/a', level: 'info', events: 5 },
@@ -107,11 +129,18 @@ describe('buildSeriesResponse', () => {
 			{ t: TS, group: '/a', level: 'error', events: 2 },
 			{ t: TS, group: '/b', level: 'info', events: 1 },
 		];
-		const body = buildSeriesResponse({ from: TS, to: TS + 60_000, bucketMs: 10_000, rows });
+		const body = buildSeriesResponse({
+			from: TS,
+			to: TS + 60_000,
+			bucketMs: 10_000,
+			groupBy: 'event',
+			rows,
+		});
 		expect(body).toMatchObject({
 			from: TS,
 			to: TS + 60_000,
 			bucketMs: 10_000,
+			groupBy: 'event',
 			totals: { events: 3, points: 2 },
 		});
 		expect(body.points).toHaveLength(2);
@@ -120,6 +149,27 @@ describe('buildSeriesResponse', () => {
 			{ level: 'info', events: 1 },
 		]);
 		expect(body.groups.map((entry) => entry.group)).toEqual(['/a', '/b']);
+	});
+
+	test('echoes the grouping it was built for', () => {
+		const request = buildSeriesResponse({
+			from: TS,
+			to: TS,
+			bucketMs: 1_000,
+			groupBy: 'request',
+			rows: [{ t: TS, group: '/a', level: 'error', events: 1 }],
+		});
+		expect(request.groupBy).toBe('request');
+		// The empty series carries it too, so the chart never has to guess.
+		const empty = buildSeriesResponse({
+			from: TS,
+			to: TS,
+			bucketMs: 1_000,
+			groupBy: 'request',
+			rows: [],
+		});
+		expect(empty.groupBy).toBe('request');
+		expect(empty.points).toEqual([]);
 	});
 });
 
@@ -182,5 +232,45 @@ describe('readSeries', () => {
 		expect(calls).toEqual([]);
 		expect(body.totals).toEqual({ events: 0, points: 0 });
 		expect(body.bucketMs).toBeGreaterThan(0);
+		// The grouping is answered even when nothing could be counted.
+		expect(body.groupBy).toBe('event');
+	});
+
+	test('forwards the grouping to the archive and echoes it back', async () => {
+		const { archive, calls } = fakeArchive([], false);
+		const request = await readSeries({
+			archive,
+			region: 'af-south-1',
+			logGroups: ['/a'],
+			from: TS,
+			to: TS + MINUTE,
+			by: 'request',
+		});
+		expect(request.groupBy).toBe('request');
+		expect(calls).toEqual([]);
+
+		const { archive: live, calls: liveCalls } = fakeArchive([]);
+		const body = await readSeries({
+			archive: live,
+			region: 'af-south-1',
+			logGroups: ['/a'],
+			from: TS,
+			to: TS + MINUTE,
+			by: 'request',
+		});
+		expect(liveCalls[0]).toMatchObject({ by: 'request' });
+		expect(body.groupBy).toBe('request');
+
+		// An absent grouping stays the event count this app has always charted.
+		const { archive: defaults, calls: defaultCalls } = fakeArchive([]);
+		const plain = await readSeries({
+			archive: defaults,
+			region: 'af-south-1',
+			logGroups: ['/a'],
+			from: TS,
+			to: TS + MINUTE,
+		});
+		expect(defaultCalls[0]).toMatchObject({ by: 'event' });
+		expect(plain.groupBy).toBe('event');
 	});
 });

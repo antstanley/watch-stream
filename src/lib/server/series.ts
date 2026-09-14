@@ -11,6 +11,7 @@ import type { LogArchive } from './archive';
 import type { ArchiveSeriesRow } from './archive-sql';
 import { parseDurationMs } from './filter';
 import type {
+	SeriesGroupBy,
 	SeriesGroupTotal,
 	SeriesLevel,
 	SeriesLevelTotal,
@@ -21,6 +22,9 @@ import type {
 /** Message used when a caller asks for a series the app cannot aggregate. */
 export const SERIES_SOURCE_HINT =
 	'Series are only aggregated for source=archive; a live CloudWatch view buckets the events it has loaded';
+
+/** Message used when the `by` parameter names something that is not a grouping. */
+export const GROUP_BY_PARAM_HINT = 'Invalid by: expected "event" or "request"';
 
 /** Bucket widths offered to an automatic window, smallest first. */
 export const BUCKET_LADDER: readonly number[] = [
@@ -79,6 +83,23 @@ export function parseBucketParam(value: string | null | undefined): number | nul
 	return Math.min(Math.max(Math.round(ms), MIN_BUCKET_MS), MAX_BUCKET_MS);
 }
 
+/**
+ * Parses the `by` parameter: what one mark on the chart counts.
+ *
+ * Returns `null` when the parameter is absent or blank (the default grouping) and
+ * `undefined` when it names something this app cannot group by, so the caller can
+ * answer 400 instead of silently charting a different question.
+ */
+export function parseGroupByParam(
+	value: string | null | undefined,
+): SeriesGroupBy | null | undefined {
+	if (value === null || value === undefined) return null;
+	const word = value.trim().toLowerCase();
+	if (word.length === 0) return null;
+	if (word === 'event' || word === 'request') return word;
+	return undefined;
+}
+
 /** Sums rows per level, in a fixed severity order. */
 export function summariseLevels(points: readonly SeriesPoint[]): SeriesLevelTotal[] {
 	const order: SeriesLevel[] = ['error', 'warn', 'info', 'debug', 'unknown'];
@@ -102,11 +123,18 @@ export function summariseGroups(points: readonly SeriesPoint[]): SeriesGroupTota
 		);
 }
 
-/** Builds the response body from raw bucket rows. */
+/**
+ * Builds the response body from raw bucket rows.
+ *
+ * `groupBy` is echoed back, so the chart can label its marks without guessing
+ * which question it asked; it is set on every response, the empty one included.
+ */
 export function buildSeriesResponse(input: {
 	from: number;
 	to: number;
 	bucketMs: number;
+	/** What one mark counts; `event` counts lines, `request` counts requests. */
+	groupBy: SeriesGroupBy;
 	rows: readonly ArchiveSeriesRow[];
 }): SeriesResponse {
 	const points: SeriesPoint[] = input.rows.map((row) => ({
@@ -119,6 +147,7 @@ export function buildSeriesResponse(input: {
 		from: input.from,
 		to: input.to,
 		bucketMs: input.bucketMs,
+		groupBy: input.groupBy,
 		levels: summariseLevels(points),
 		groups: summariseGroups(points),
 		points,
@@ -133,7 +162,8 @@ export function buildSeriesResponse(input: {
  * Reads the archived counts for a window.
  *
  * An unavailable archive answers an empty series rather than an error, so the
- * chart can show "nothing archived yet" instead of a failure.
+ * chart can show "nothing archived yet" instead of a failure. `by` picks what a
+ * mark counts and defaults to one mark per event.
  */
 export async function readSeries(input: {
 	archive: LogArchive;
@@ -143,9 +173,18 @@ export async function readSeries(input: {
 	to: number;
 	levels?: readonly LogLevel[] | null;
 	bucketMs?: number | null;
+	/** What one mark counts; absent or `null` means one mark per event. */
+	by?: SeriesGroupBy | null;
 }): Promise<SeriesResponse> {
 	const bucketMs = input.bucketMs ?? chooseBucketMs(input.to - input.from);
-	const empty = buildSeriesResponse({ from: input.from, to: input.to, bucketMs, rows: [] });
+	const groupBy = input.by ?? 'event';
+	const empty = buildSeriesResponse({
+		from: input.from,
+		to: input.to,
+		bucketMs,
+		groupBy,
+		rows: [],
+	});
 	if (!input.archive.available) return empty;
 	const rows = await input.archive.seriesQuery({
 		region: input.region,
@@ -154,6 +193,7 @@ export async function readSeries(input: {
 		endTime: input.to,
 		bucketMs,
 		levels: input.levels ?? null,
+		by: groupBy,
 	});
-	return buildSeriesResponse({ from: input.from, to: input.to, bucketMs, rows });
+	return buildSeriesResponse({ from: input.from, to: input.to, bucketMs, groupBy, rows });
 }

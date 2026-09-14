@@ -7,6 +7,7 @@
  * {@link SeriesPoint} shape, so the chart has one data contract.
  */
 import { effectiveLevel, type LogLevel } from './log-buffer';
+import { bucketRequests } from './request-groups';
 import type { LogEventDto, SeriesLevel, SeriesPoint } from './types';
 
 /** Severity order used wherever levels are listed. */
@@ -50,6 +51,11 @@ export type BucketEventsOptions = {
 	level?: LogLevel | null;
 	/** Group name used for events that carry none. */
 	fallbackGroup?: string;
+	/**
+	 * Count requests instead of lines: lines that share a request id become one
+	 * mark, placed where the request started and coloured by its worst level.
+	 */
+	byRequest?: boolean;
 };
 
 /** Level of an event as the chart counts it. */
@@ -61,7 +67,9 @@ export function seriesLevelOf(event: LogEventDto): SeriesLevel {
  * Counts events into buckets of one width, per group and level.
  *
  * Events outside the window are ignored, as are events without a usable
- * timestamp: the chart describes exactly the window it is drawn for.
+ * timestamp: the chart describes exactly the window it is drawn for. With
+ * `byRequest`, a request is one mark instead of its lines being many, which is
+ * the same thing the archive counts in SQL.
  */
 export function bucketEvents(
 	events: readonly LogEventDto[],
@@ -74,6 +82,15 @@ export function bucketEvents(
 		Number.isFinite(requested) && requested > 0 ? Math.round(requested) : DEFAULT_BUCKET_MS;
 	const levelFilter = options.level ?? null;
 	const fallbackGroup = options.fallbackGroup ?? '';
+	if (options.byRequest === true) {
+		return bucketRequests(events, {
+			from: options.from,
+			to: options.to,
+			bucketMs,
+			level: levelFilter,
+			fallbackGroup,
+		});
+	}
 	const counts = new Map<string, SeriesPoint>();
 
 	for (const event of events) {

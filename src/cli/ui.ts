@@ -16,6 +16,20 @@ import {
 	spinner,
 } from '@clack/prompts';
 
+/**
+ * Thrown when the user cancels a prompt with Ctrl+C.
+ *
+ * A cancel is not an answer: reading it as "No" is how the CLI used to keep
+ * running (server and all) after a Ctrl+C that looked like it did nothing, so
+ * the prompt layer raises this instead and the CLI stops cleanly.
+ */
+export class PromptCancelled extends Error {
+	constructor() {
+		super('the prompt was cancelled');
+		this.name = 'PromptCancelled';
+	}
+}
+
 export type Ui = {
 	/** True when animated output and prompts are safe to use. */
 	readonly interactive: boolean;
@@ -26,13 +40,23 @@ export type Ui = {
 	startSpinner(text: string): void;
 	stopSpinner(text: string): void;
 	failSpinner(text: string): void;
-	/** Asks for a value from `options`; resolves `null` when cancelled or unavailable. */
+	/**
+	 * Asks for a value from `options`.
+	 *
+	 * Resolves `null` when the question does not apply (no choices, or a
+	 * non-interactive run); throws {@link PromptCancelled} when the user cancels.
+	 */
 	choose(
 		message: string,
 		options: { value: string; label?: string }[],
 		initial?: string | null,
 	): Promise<string | null>;
-	/** Asks a yes/no question; a non-interactive run always answers `false`. */
+	/**
+	 * Asks a yes/no question; a non-interactive run always answers `false`.
+	 *
+	 * Throws {@link PromptCancelled} when the user cancels, because "stop" and
+	 * "no" are different answers and only one of them ends the process.
+	 */
 	confirm(message: string, initial?: boolean): Promise<boolean>;
 };
 
@@ -102,13 +126,16 @@ export function createUi(options: { interactive?: boolean } = {}): Ui {
 			});
 			if (isCancel(answer)) {
 				cancel('Cancelled.');
-				return null;
+				throw new PromptCancelled();
 			}
 			return String(answer);
 		},
 		confirm: async (message, initial = true) => {
 			const answer = await confirm({ message, initialValue: initial });
-			if (isCancel(answer)) return false;
+			if (isCancel(answer)) {
+				cancel('Cancelled.');
+				throw new PromptCancelled();
+			}
 			return answer === true;
 		},
 	};

@@ -12,6 +12,7 @@ export const STORAGE_KEYS = {
 	wrap: 'watch-stream:wrap',
 	jsonView: 'watch-stream:json-view',
 	chartOpen: 'watch-stream:chart-open',
+	groupRequests: 'watch-stream:group-requests',
 } as const;
 
 /** Default width of the group-list pane, in rem (matches the original layout). */

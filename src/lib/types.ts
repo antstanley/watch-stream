@@ -79,6 +79,13 @@ export type LogEventDto = {
 	 * the client falls back to its own guess.
 	 */
 	level?: LogLevel | null;
+	/**
+	 * Request id the line belongs to, as detected on the server, or `null` when it
+	 * has none. Absent means "not detected here", and the client falls back to its
+	 * own detection. Lines that share an id are one request: the log view groups
+	 * them into one row and the chart counts them once.
+	 */
+	requestId?: string | null;
 	/** Log group the event belongs to; sent when more than one group is in play. */
 	group?: string;
 };
@@ -182,8 +189,18 @@ export type SeriesGroupTotal = { group: string; events: number };
 /** Events per level over the whole window. */
 export type SeriesLevelTotal = { level: SeriesLevel; events: number };
 
+/**
+ * What one chart mark stands for.
+ *
+ * `event` counts lines; `request` counts requests, so an incident reads as the
+ * number of affected requests rather than the number of lines they wrote.
+ */
+export type SeriesGroupBy = 'event' | 'request';
+
 /** Answer of `GET /api/series` - the data behind the chart. */
 export type SeriesResponse = {
+	/** What one mark stands for, echoing the `by` parameter. */
+	groupBy: SeriesGroupBy;
 	/** Inclusive start of the window, epoch ms. */
 	from: number;
 	/** Inclusive end of the window, epoch ms. */

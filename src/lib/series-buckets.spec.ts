@@ -212,3 +212,28 @@ describe('isMeaningfulBrush', () => {
 		).toBe(false);
 	});
 });
+
+describe('bucketEvents with request grouping', () => {
+	const window = { from: 1_700_000_000_000, to: 1_700_000_600_000 };
+
+	test('counts one mark per request instead of one per line', () => {
+		const events = [
+			{ id: '1', timestamp: window.from, message: '{"requestId":"req-a","level":"info"}' },
+			{ id: '2', timestamp: window.from + 1_000, message: '{"requestId":"req-a","level":"error"}' },
+			{ id: '3', timestamp: window.from + 2_000, message: '{"requestId":"req-b","level":"info"}' },
+		] as LogEventDto[];
+		const points = bucketEvents(events, { ...window, bucketMs: 60_000, byRequest: true });
+		expect(points.reduce((sum, point) => sum + point.events, 0)).toBe(2);
+		expect(points.map((point) => point.level).toSorted()).toEqual(['error', 'info']);
+	});
+
+	test('counts lines one by one when grouping is off', () => {
+		const events = [
+			{ id: '1', timestamp: window.from, message: '{"requestId":"req-a","level":"info"}' },
+			{ id: '2', timestamp: window.from + 1_000, message: '{"requestId":"req-a","level":"info"}' },
+		] as LogEventDto[];
+		expect(bucketEvents(events, { ...window, bucketMs: 60_000, byRequest: false })[0]?.events).toBe(
+			2,
+		);
+	});
+});

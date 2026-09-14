@@ -640,3 +640,87 @@ describe('LogViewer controlled level filter', () => {
 		expect(screen.getAllByTestId('log-line')).toHaveLength(1);
 	});
 });
+
+describe('LogViewer: grouping by request', () => {
+	const REQUEST_LINES: LogEventDto[] = [
+		{
+			id: 'a',
+			timestamp: Date.UTC(2024, 0, 2, 3, 4, 5, 0),
+			message: '{"requestId":"req-1","level":"info","msg":"started"}',
+			level: 'info',
+			requestId: 'req-1',
+			streamName: 'stream-1',
+		},
+		{
+			id: 'b',
+			timestamp: Date.UTC(2024, 0, 2, 3, 4, 5, 500),
+			message: '{"requestId":"req-1","level":"error","msg":"failed"}',
+			level: 'error',
+			requestId: 'req-1',
+			streamName: 'stream-1',
+		},
+		{
+			id: 'c',
+			timestamp: Date.UTC(2024, 0, 2, 3, 4, 6, 0),
+			message: 'a line with no request at all',
+		},
+	];
+
+	it('shows one row per request by default, with its worst level', () => {
+		render(LogViewer, { props: { lines: REQUEST_LINES, group: '/aws/app', status: 'live' } });
+
+		const groups = screen.getAllByTestId('log-request-group');
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.getAttribute('data-request-id')).toBe('req-1');
+		expect(groups[0]?.getAttribute('data-level')).toBe('error');
+		expect(screen.getByTestId('request-group-count').textContent).toContain('2 lines');
+		expect(screen.getByTestId('request-group-level').textContent).toContain('Error');
+		expect(screen.getByTestId('request-group-span').textContent).toContain('500ms');
+		// The worst line is what the collapsed row previews.
+		expect(screen.getByTestId('request-group-preview').textContent).toContain('failed');
+		// The request's lines are hidden until the row is opened, and the loose line stays.
+		expect(screen.queryAllByTestId('log-line')).toHaveLength(1);
+		expect(screen.getByTestId('request-count').textContent).toContain('1 requests');
+	});
+
+	it('opens a request to show every line it holds', async () => {
+		render(LogViewer, { props: { lines: REQUEST_LINES, group: '/aws/app', status: 'live' } });
+
+		await fireEvent.click(screen.getByTestId('request-group-summary'));
+		const children = screen.getAllByTestId('log-line');
+		expect(children).toHaveLength(3);
+		expect(screen.getAllByTestId('log-line')[1]?.getAttribute('data-request-child')).toBe('true');
+		expect(screen.getByTestId('log-request-group').getAttribute('data-expanded')).toBe('true');
+	});
+
+	it('shows one row per line when grouping is off', () => {
+		render(LogViewer, {
+			props: { lines: REQUEST_LINES, group: '/aws/app', status: 'live', groupRequests: false },
+		});
+
+		expect(screen.queryAllByTestId('log-request-group')).toHaveLength(0);
+		expect(screen.getAllByTestId('log-line')).toHaveLength(3);
+		expect(screen.queryAllByTestId('request-count')).toHaveLength(0);
+	});
+
+	it('renders a request with a single line as that line', () => {
+		render(LogViewer, {
+			props: {
+				lines: [REQUEST_LINES[2] as LogEventDto],
+				group: '/aws/app',
+				status: 'live',
+			},
+		});
+		expect(screen.queryAllByTestId('log-request-group')).toHaveLength(0);
+		expect(screen.getAllByTestId('log-line')).toHaveLength(1);
+	});
+
+	it('reports the toggle, so the page can own the preference', async () => {
+		const onGroupToggle = vi.fn<() => void>();
+		render(LogViewer, {
+			props: { lines: REQUEST_LINES, group: '/aws/app', status: 'live', onGroupToggle },
+		});
+		await fireEvent.click(screen.getByTestId('group-toggle'));
+		expect(onGroupToggle).toHaveBeenCalledTimes(1);
+	});
+});

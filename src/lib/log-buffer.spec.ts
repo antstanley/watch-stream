@@ -4,8 +4,13 @@ import {
 	LEVEL_KEYS,
 	LogRingBuffer,
 	LogStore,
+	LEVEL_RANK,
+	REQUEST_ID_KEYS,
 	detectLevel,
 	detectLevelWithSource,
+	detectRequestId,
+	levelRank,
+	mostCriticalLevel,
 	effectiveLevel,
 	eventKey,
 	filterByLevel,
@@ -342,5 +347,75 @@ describe('effectiveLevel and filterByLevel', () => {
 	it('colours an unknown level like a plain line', () => {
 		expect(levelColorClass(null)).toBe(levelColorClass('info'));
 		expect(levelColorClass('error')).toContain('red');
+	});
+});
+
+describe('detectRequestId', () => {
+	it('reads the id a payload declares', () => {
+		expect(detectRequestId('{"requestId":"8f2c1a93-1b2c"}')).toBe('8f2c1a93-1b2c');
+		expect(detectRequestId('2026-01-01 INFO {"request_id":"abc.def"}')).toBe('abc.def');
+	});
+
+	it('reads every shape of request id key', () => {
+		for (const key of REQUEST_ID_KEYS) {
+			expect(detectRequestId(`{"${key}":"abcd-1234"}`)).toBe('abcd-1234');
+		}
+	});
+
+	it('keeps a numeric id as what the log said', () => {
+		expect(detectRequestId('{"requestId":12345678}')).toBe('12345678');
+	});
+
+	it('reads the text form, which is how Lambda prints it', () => {
+		expect(detectRequestId('START RequestId: 1a2b3c4d-5e6f Version: $LATEST')).toBe(
+			'1a2b3c4d-5e6f',
+		);
+		expect(detectRequestId('REPORT RequestId: abc.def Duration: 12.5 ms')).toBe('abc.def');
+		expect(detectRequestId('requestId=7f3a9b2c service=api')).toBe('7f3a9b2c');
+		expect(detectRequestId('request id: 9c1f-allowed')).toBe('9c1f-allowed');
+	});
+
+	it('ignores an id that is too short to identify a request', () => {
+		expect(detectRequestId('{"requestId":"ab"}')).toBeNull();
+		expect(detectRequestId('requestId=42')).toBeNull();
+	});
+
+	it('ignores placeholders that mean "there is no id"', () => {
+		expect(detectRequestId('{"requestId":"none"}')).toBeNull();
+		expect(detectRequestId('RequestId: null')).toBeNull();
+		expect(detectRequestId('request_id: unknown')).toBeNull();
+	});
+
+	it('does not treat some other id as a request id', () => {
+		expect(detectRequestId('trace 5f2c9a10-1234-4abc-9def-0123456789ab done')).toBeNull();
+		expect(detectRequestId('{"traceId":"5f2c9a10-1234"}')).toBeNull();
+		expect(detectRequestId('{"sessionId":"abcd-1234"}')).toBeNull();
+	});
+
+	it('reports nothing for a line with no id at all', () => {
+		expect(detectRequestId('server started in 120 ms')).toBeNull();
+		expect(detectRequestId('')).toBeNull();
+	});
+});
+
+describe('level ranks', () => {
+	it('ranks error above warn above info above debug above unknown', () => {
+		const order = ['error', 'warn', 'info', 'debug', 'unknown'] as const;
+		for (let index = 1; index < order.length; index += 1) {
+			const better = LEVEL_RANK[order[index - 1] as (typeof order)[number]];
+			const worse = LEVEL_RANK[order[index] as (typeof order)[number]];
+			expect(better).toBeGreaterThan(worse);
+		}
+		expect(levelRank(null)).toBe(LEVEL_RANK.unknown);
+	});
+
+	it('picks the most critical level of a set', () => {
+		expect(mostCriticalLevel(['info', 'error', 'debug'])).toBe('error');
+		expect(mostCriticalLevel(['info', 'warn'])).toBe('warn');
+	});
+
+	it('reports nothing when no level is present', () => {
+		expect(mostCriticalLevel([])).toBeNull();
+		expect(mostCriticalLevel([null, 'unknown'])).toBeNull();
 	});
 });
