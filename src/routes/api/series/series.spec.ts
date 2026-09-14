@@ -97,6 +97,31 @@ describe('GET /api/series', () => {
 		});
 	});
 
+	test('counts one mark per request when asked, and says so in the answer', async () => {
+		const response = await GET(
+			event({
+				source: 'archive',
+				region: 'af-south-1',
+				group: '/a',
+				range: '15m',
+				by: 'request',
+			}) as never,
+		);
+		expect(response.status).toBe(200);
+		expect(state.calls[0]).toMatchObject({ by: 'request' });
+		expect((await response.json()) as { groupBy: string }).toMatchObject({ groupBy: 'request' });
+	});
+
+	test('defaults to one mark per event', async () => {
+		const response = await GET(
+			event({ source: 'archive', region: 'af-south-1', group: '/a', range: '15m' }) as never,
+		);
+		expect(response.status).toBe(200);
+		// The default is spelled out, so the archive never has to guess either.
+		expect(state.calls[0]).toMatchObject({ by: 'event' });
+		expect((await response.json()) as { groupBy: string }).toMatchObject({ groupBy: 'event' });
+	});
+
 	test('does not clamp an old window to 14 days', async () => {
 		const longAgo = TS - 60 * 24 * 60 * 60 * 1000;
 		const response = await GET(
@@ -142,6 +167,13 @@ describe('GET /api/series', () => {
 		const badSource = await GET(event({ source: 'duckdb', group: '/a' }) as never);
 		expect(badSource.status).toBe(400);
 		expect(await errorOf(badSource)).toMatchObject({ code: 'invalid-source' });
+
+		const badBy = await GET(
+			event({ source: 'archive', region: 'af-south-1', group: '/a', by: 'session' }) as never,
+		);
+		expect(badBy.status).toBe(400);
+		expect(await errorOf(badBy)).toMatchObject({ code: 'invalid-group-by' });
+		expect(state.calls).toEqual([]);
 	});
 
 	test('requires a region, because archived rows are stored per region', async () => {

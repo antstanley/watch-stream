@@ -19,7 +19,7 @@ import { mergeTails } from '$lib/server/multi-tail';
 import { SOURCE_PARAM_HINT, parseSourceParam } from '$lib/server/source';
 import { sseFrame } from '$lib/server/sse';
 import { tailLogEvents, type TailBatch } from '$lib/server/tail';
-import { LEVEL_PARAM_HINT, parseLevelParam, withLevels } from '$lib/server/level-filter';
+import { LEVEL_PARAM_HINT, parseLevelParam, withDetections } from '$lib/server/level-filter';
 import type { LogLevel } from '$lib/log-buffer';
 import type {
 	LogEventDto,
@@ -391,10 +391,11 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 			for await (const batch of feed.generator) {
 				if (closed || bodyAbort.signal.aborted) break;
 				if (batch.type === 'events') {
-					// Live events carry no level, so the server detects it with the same
-					// detector the archive stores. Archived events already hold the level
-					// that was stored (possibly `null`), so they are passed through.
-					const events = source === 'cloudwatch' ? withLevels(batch.events) : batch.events;
+					// Every event is completed with the fields the archive stores: a live
+					// event gets its level and request id detected here, and a row read
+					// from the archive keeps the level it was stored with (possibly
+					// `null`) while a missing request id is detected from its message.
+					const events = withDetections(batch.events);
 					const payload: StreamLogPayload = { events };
 					consecutiveErrors = 0;
 					enqueue(sseFrame('log', payload));

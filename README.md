@@ -74,6 +74,9 @@ or handing a teammate a link that shows exactly the window you are staring at.
   moment - the log view follows the brush, and a click clears it.
 - **Follow more than one group at once.** Tick extra groups in the sidebar and the chart and the log
   view cover all of them, with a group column and a merged stream; the selection lives in the URL.
+- **One request, one row.** Lines that share a request id are grouped - in the log view and in the
+  chart - and coloured by the most critical line in the request, so you read requests instead of the
+  twenty lines each one wrote. Toggle it off to see every line.
 - **Severity you can filter on.** Every archived line is tagged `error`, `warn`, `info` or `debug`,
   and the viewer has chips to narrow to one level. A level the log itself declares
   (`{"level":"error"}`) is trusted; otherwise it is read from the line, and a line that carries no
@@ -114,6 +117,10 @@ watch-tail [options]
   -h, --help             Show this help
   -v, --version          Show the version
 ```
+
+The CLI keeps the terminal while it runs: `Ctrl+C` stops the server and exits, whether it is idle or
+waiting at one of its questions (the login offer, the profile picker) - cancelling a question is a stop,
+not a "no".
 
 Shell completions come from [`@bomb.sh/tab`](https://bomb.sh): flags, `--region` values from the
 CloudWatch Logs region list, and `--profile` values from your own `~/.aws/config`. zsh, bash, fish and
@@ -299,10 +306,30 @@ Three things worth knowing:
   the windows you have actually visited. It is also local, unencrypted and outside your AWS account -
   treat the file like the logs themselves.
 
+## Requests, not lines
+
+Log lines that belong to the same request are one thing, not twenty. watch-tail reads a request id out
+of each line - a declared `requestId` (also `request_id`, `awsRequestId`, an `x-request-id`) or the
+`RequestId: ...` that a Lambda prints - and groups the lines that share it:
+
+- **The log view** collapses each request into a single row: its request id, how many lines it wrote,
+  how long it took, and the level of its **most critical line**, so a request with one error among
+  twenty info lines reads as an error. Click the row to open it and see every line, indented, in order.
+- **The chart** counts **one mark per request**, placed at the request's first line and coloured by
+  that same most critical level, so a spike of failing requests is a spike of marks rather than a spike
+  of log volume.
+- **By request** in the log view's toolbar turns it off, and the view goes back to one row per line
+  (and the chart back to one mark per line). Your choice is remembered.
+
+Grouping is on by default. Lines with no request id are never grouped: each keeps its own row and its
+own mark, so nothing is hidden by a request id the log did not have. A request whose lines span more
+than one bucket is counted once, where it started, which is why the chart's total can be lower than
+the number of lines.
+
 ## The chart
 
 In **Historic** mode (and for the local archive) a scatter chart sits above the log view: X is time, Y
-is the number of events in a bucket, and each level is its own colour. Drag across it to brush a
+is the number of requests in a bucket, and each level is its own colour. Drag across it to brush a
 range - the log view, the window chip and the URL all follow, so a brush is a shareable view of the
 spike you just found. Click the chart to clear the brush, or press **Reset zoom** to go back to the
 preset window. The level chips filter the chart and the log view together.
@@ -312,7 +339,8 @@ pixels, clears the brush instead of zooming into a sliver of a window, and the v
 you release rather than while you drag - so the stream is not restarted mid-gesture.
 
 With several groups selected, the counts cover all of them and the chart's legend splits the totals by
-level. The archive answers the chart with one SQL query over the whole window; a CloudWatch view has no
+level. The level chips filter requests by their most critical level, which is the level the marks are
+drawn in, so the legend and the filter never disagree. The archive answers the chart with one SQL query over the whole window; a CloudWatch view has no
 aggregate API, so there the chart counts the events already in the view.
 
 The panel has a header you can click to collapse it, and it remembers that choice: collapsed, it is

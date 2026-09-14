@@ -47,6 +47,8 @@
 		bucketMs?: number;
 		/** Log groups the points cover, for the summary. */
 		groups?: string[];
+		/** True when one mark stands for one request rather than one line. */
+		byRequest?: boolean;
 		/** True while the counts are being fetched. */
 		loading?: boolean;
 		/** Called with the brushed range when the drag ends, or `null` on clear. */
@@ -66,6 +68,7 @@
 		bucketMs = 0,
 		groups = [],
 		loading = false,
+		byRequest = true,
 		onBrush,
 		height = 200,
 		open = true,
@@ -142,6 +145,8 @@
 	let bucketCount = $derived(new Set(points.map((point) => point.t)).size);
 	/** True when there is something to draw. */
 	let hasPoints = $derived(points.length > 0);
+	/** What one mark stands for, which is what the totals count. */
+	let unit = $derived(byRequest ? 'requests' : 'events');
 
 	/** Clears the brush, for the host's Reset zoom control. */
 	export function reset(): void {
@@ -168,7 +173,8 @@
 			Events over time
 		</button>
 		<span class="text-neutral-400" data-testid="scatter-summary">
-			{formatCount(totalEvents)} events in {formatCount(bucketCount)} buckets
+			{formatCount(totalEvents)}
+			{unit} in {formatCount(bucketCount)} buckets
 		</span>
 		{#if groups.length > 1}
 			<span class="text-neutral-500" data-testid="scatter-groups">

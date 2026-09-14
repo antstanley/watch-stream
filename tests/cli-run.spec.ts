@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChildProcess } from 'node:child_process';
 import { run, type CliIo } from '../src/cli/index.ts';
-import type { Ui } from '../src/cli/ui.ts';
+import { PromptCancelled, type Ui } from '../src/cli/ui.ts';
 import type { startServer } from '../src/cli/server.ts';
 
 /** Records everything the UI would have shown. */
 function recorder(
-	options: { confirm?: boolean[]; choose?: (string | null)[] } = {},
+	options: {
+		confirm?: boolean[];
+		choose?: (string | null)[];
+		/** Which prompt the user cancels with Ctrl+C, if any. */
+		cancel?: 'choose' | 'confirm';
+	} = {},
 ): Ui & { lines: string[]; asked: string[]; choices: string[] } {
 	const lines: string[] = [];
 	const asked: string[] = [];
@@ -28,11 +33,13 @@ function recorder(
 		failSpinner: push,
 		choose: async (message, items, initial) => {
 			asked.push(message);
+			if (options.cancel === 'choose') throw new PromptCancelled();
 			if (chosen.length > 0) return chosen.shift() as string | null;
 			return initial ?? items[0]?.value ?? null;
 		},
 		confirm: async (message) => {
 			asked.push(message);
+			if (options.cancel === 'confirm') throw new PromptCancelled();
 			return confirms.length > 0 ? (confirms.shift() as boolean) : false;
 		},
 	};
@@ -706,5 +713,75 @@ describe('run: the local history archive', () => {
 		const hm = harness();
 		await run(['--print', '--no-archive'], hm.io);
 		expect(hm.out.join('\n')).toContain('WATCH_STREAM_ARCHIVE=off');
+	});
+});
+
+describe('run: cancelling a prompt with Ctrl+C', () => {
+	const FAILURE = {
+		ok: false as const,
+		code: 'missing-credentials',
+		message: 'Your session has expired. Please reauthenticate.',
+		credentialProblem: true,
+	};
+
+	/**
+	 * Runs the CLI with credentials that fail, so it reaches a prompt, and with a
+	 * user who presses Ctrl+C at that prompt.
+	 */
+	async function cancelAt(where: 'choose' | 'confirm'): Promise<{
+		code: number;
+		ui: Ui & { lines: string[] };
+		kills: string[];
+	}> {
+		const h = harness({
+			readConfigText: () => '[profile acme-prod]\nregion = eu-west-1\n',
+			readProfiles: () => ['default', 'acme-prod'],
+		});
+		const ui = recorder({ cancel: where, choose: ['default'] });
+		const kills: string[] = [];
+		h.io.ui = ui;
+		h.io.probeCredentials = async () => FAILURE;
+		h.io.startServerImpl = ((input) => {
+			h.started.push({ env: input.env, port: input.port, host: input.host });
+			return {
+				kill: (signal?: NodeJS.Signals) => {
+					kills.push(signal ?? 'none');
+					return true;
+				},
+				exitCode: null,
+				signalCode: null,
+				// A real server shuts down gracefully on SIGTERM: `close` arrives
+				// with code 0 and no signal, which is what `stopServer` reports.
+				once: (event: string, listener: (code: number | null, signal: string | null) => void) => {
+					if (event === 'close') setTimeout(() => listener(0, null), 0);
+				},
+			} as unknown as ChildProcess;
+		}) as typeof startServer;
+
+		const code = await run(['--no-open'], h.io);
+		return { code, ui, kills };
+	}
+
+	it('stops the server and reports the stop when the login question is cancelled', async () => {
+		const { code, ui, kills } = await cancelAt('confirm');
+
+		expect(code).toBe(0);
+		expect(kills).toContain('SIGTERM');
+		expect(ui.lines.join('\n')).toContain('stopped');
+	});
+
+	it('stops the server when the profile picker is cancelled', async () => {
+		const { code, ui, kills } = await cancelAt('choose');
+
+		expect(code).toBe(0);
+		expect(kills).toContain('SIGTERM');
+		expect(ui.lines.join('\n')).toContain('stopped');
+	});
+
+	it('never reports a cancelled prompt as a failure', async () => {
+		const { code, ui } = await cancelAt('confirm');
+
+		expect(code).toBe(0);
+		expect(ui.lines.join('\n')).not.toContain('still failing');
 	});
 });

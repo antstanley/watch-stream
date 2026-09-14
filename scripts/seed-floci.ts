@@ -38,6 +38,21 @@ type Fixture = {
 	retentionInDays?: number;
 	/** Message templates; `{n}`/`{id}` are replaced per event. */
 	templates: string[];
+	/**
+	 * A fixture whose lines belong to requests.
+	 *
+	 * A Lambda prints one invocation as `START RequestId: ...`, some body lines,
+	 * then `END`/`REPORT` with the *same* id - so a fixture that wants to look like
+	 * one gets the id and the burst shape, rather than a fresh id per line.
+	 */
+	requests?: {
+		/** Line opening a request. */
+		start: string;
+		/** Body lines; two to four are drawn per request. */
+		bodies: string[];
+		/** Lines closing a request. */
+		end: string[];
+	};
 };
 
 const FIXTURES: Fixture[] = [
@@ -45,15 +60,21 @@ const FIXTURES: Fixture[] = [
 		group: '/aws/lambda/checkout-api',
 		retentionInDays: 14,
 		streams: ['2026/01/01/[$LATEST]9f2c1a4b', '2026/01/02/[$LATEST]1a77b3de'],
-		templates: [
-			'START RequestId: {id} Version: $LATEST',
-			'{"level":"info","msg":"cart validated","items":{n},"durationMs":{n}}',
-			'{"level":"info","msg":"order accepted","order":{"id":"ord_{id}","total":{n},"currency":"ZAR","items":[{"sku":"SKU-{n}","qty":{n}},{"sku":"SKU-{n}","qty":1}]},"customer":{"id":"cus_{id}","tier":"gold"}}',
-			'{"level":"warn","msg":"payment retry","attempt":{n},"provider":"stripe"}',
-			'{"level":"error","msg":"checkout failed","reason":"card_declined","orderId":"ord_{n}"}',
-			'END RequestId: {id}',
-			'REPORT RequestId: {id}\tDuration: {n} ms\tBilled Duration: {n} ms\tMemory Size: 512 MB',
-		],
+		templates: [],
+		// One invocation is one request, which is what the log view groups by.
+		requests: {
+			start: 'START RequestId: {id} Version: $LATEST',
+			bodies: [
+				'{"level":"info","requestId":"{id}","msg":"cart validated","items":{n},"durationMs":{n}}',
+				'{"level":"info","requestId":"{id}","msg":"order accepted","order":{"id":"ord_{id}","total":{n},"currency":"ZAR","items":[{"sku":"SKU-{n}","qty":{n}},{"sku":"SKU-{n}","qty":1}]},"customer":{"id":"cus_{id}","tier":"gold"}}',
+				'{"level":"warn","requestId":"{id}","msg":"payment retry","attempt":{n},"provider":"stripe"}',
+				'{"level":"error","requestId":"{id}","msg":"checkout failed","reason":"card_declined","orderId":"ord_{n}"}',
+			],
+			end: [
+				'END RequestId: {id}',
+				'REPORT RequestId: {id}\tDuration: {n} ms\tBilled Duration: {n} ms\tMemory Size: 512 MB',
+			],
+		},
 	},
 	{
 		group: '/aws/lambda/order-worker',
@@ -150,10 +171,8 @@ export function randomId(): string {
 }
 
 /** Expand a fixture template into a concrete log message. */
-export function renderMessage(template: string, seed: number): string {
-	return template
-		.replaceAll('{id}', randomId())
-		.replaceAll('{n}', String(1 + Math.floor(seed % 997)));
+export function renderMessage(template: string, seed: number, id = randomId()): string {
+	return template.replaceAll('{id}', id).replaceAll('{n}', String(1 + Math.floor(seed % 997)));
 }
 
 function pick<T>(items: T[]): T {
@@ -231,6 +250,33 @@ async function putEvents(
 	}
 }
 
+/**
+ * Lines of one request: its opening line, two to four body lines, and the lines
+ * that close it. Every line carries the same id, spaced a few milliseconds apart,
+ * which is what makes the request groupable and its span measurable.
+ */
+function requestEvents(
+	fixture: Fixture,
+	stream: string,
+	index: number,
+	startedAt: number,
+): InputLogEvent[] {
+	const shape = fixture.requests;
+	if (shape === undefined) return [];
+	const id = randomId();
+	const seed = streamSeed(stream, index);
+	const bodyCount = 2 + (seed % 3);
+	const bodies = Array.from(
+		{ length: bodyCount },
+		(_, position) => shape.bodies[(seed + position) % shape.bodies.length] as string,
+	);
+	const lines = [shape.start, ...bodies, ...(seed % 4 === 0 ? [] : shape.end)];
+	return lines.map((template, position) => ({
+		timestamp: startedAt + position * 4,
+		message: renderMessage(template, seed + position, id),
+	}));
+}
+
 /** Small per-stream offset so two streams never render identical sample lines. */
 function streamSeed(stream: string, index: number): number {
 	let hash = 0;
@@ -244,18 +290,28 @@ async function backfill(client: CloudWatchLogsClient, options: Options): Promise
 	for (const fixture of FIXTURES) {
 		for (const stream of fixture.streams) {
 			const events: InputLogEvent[] = [];
-			for (let index = 0; index < options.backfill; index += 1) {
-				const offset = Math.floor((index / options.backfill) * windowMs);
-				events.push({
-					timestamp: now - windowMs + offset,
-					message: renderMessage(pick(fixture.templates), streamSeed(stream, index)),
-				});
+			// A fixture with `requests` spreads the same number of *lines* over fewer
+			// requests, so the demo data reads the way the log view groups it.
+			const requests = fixture.requests === undefined ? 0 : Math.max(1, options.backfill / 5);
+			const slots = fixture.requests === undefined ? options.backfill : Math.ceil(requests);
+			for (let index = 0; index < slots; index += 1) {
+				const offset = Math.floor((index / slots) * windowMs);
+				const at = now - windowMs + offset;
+				if (fixture.requests === undefined) {
+					events.push({
+						timestamp: at,
+						message: renderMessage(pick(fixture.templates), streamSeed(stream, index)),
+					});
+					continue;
+				}
+				events.push(...requestEvents(fixture, stream, index, at));
 			}
 			await putEvents(client, fixture.group, stream, events);
 		}
 	}
 	console.log(
-		`Backfilled ${options.backfill} events per stream over the last ${options.backfillMinutes} minutes.`,
+		`Backfilled ${options.backfill} events per stream over the last ${options.backfillMinutes} minutes` +
+			` (the Lambda groups hold ${options.backfill / 5} requests each).`,
 	);
 }
 

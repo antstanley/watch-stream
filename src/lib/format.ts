@@ -41,6 +41,26 @@ function trimZero(value: number): string {
 }
 
 /**
+ * Formats a duration as `250ms`, `1.2s`, `2m 5s` or `1h 2m`, for a request's span.
+ * Sub-second spans keep a millisecond value, because that is what a slow request
+ * is measured in; longer spans stop at the first two units a reader needs.
+ */
+export function formatSpan(ms: number | null | undefined): string {
+	if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return EMPTY_VALUE;
+	const total = Math.round(ms);
+	if (total < 1_000) return `${total}ms`;
+	const seconds = total / 1_000;
+	if (seconds < 60) return `${trimZero(seconds)}s`;
+	const wholeSeconds = Math.floor(seconds);
+	const minutes = Math.floor(wholeSeconds / 60);
+	const restSeconds = wholeSeconds % 60;
+	if (minutes < 60) return restSeconds === 0 ? `${minutes}m` : `${minutes}m ${restSeconds}s`;
+	const hours = Math.floor(minutes / 60);
+	const restMinutes = minutes % 60;
+	return restMinutes === 0 ? `${hours}h` : `${hours}h ${restMinutes}m`;
+}
+
+/**
  * Formats a byte count as `B`, `KiB`, `MiB` or `GiB`, with at most one decimal for scaled units.
  * Returns {@link EMPTY_VALUE} for a missing or negative value.
  */

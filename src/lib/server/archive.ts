@@ -19,17 +19,29 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { LogEventDto } from '$lib/types';
 import {
 	ARCHIVE_INSERT_CHUNK,
+	ARCHIVE_MAX_SEQ_SQL,
 	ARCHIVE_SCHEMA,
 	ARCHIVE_TOTALS_SQL,
+	REQUEST_ID_BACKFILL_LIMIT,
 	buildGroupsQuery,
 	buildInsertSql,
 	buildPageQuery,
+	buildRequestIdBackfillQuery,
+	buildRequestIdBackfillStateQuery,
+	buildRequestIdBackfillStateWrite,
+	buildRequestIdBackfillUpdate,
+	maxSeqOf,
+	planRequestIdBackfill,
+	rowToBackfillWatermark,
+	rowToMaxSeq,
 	rowToTotals,
+	rowsToBackfillCandidates,
 	rowsToGroups,
 	rowsToPage,
 	rowsToSeries,
 	buildSeriesQuery,
 	toArchiveParams,
+	toRequestIdBackfillParams,
 	type ArchiveCursor,
 	type ArchiveGroupRow,
 	type ArchivePageRequest,
@@ -221,6 +233,8 @@ export class LogArchive {
 	 *
 	 * Statements are executed in order: the sequence first, then the table, then
 	 * the indexes, so an existing file from an older build is upgraded in place.
+	 * The request-id backfill runs last, inside the same serialised path, and
+	 * cannot fail the open.
 	 */
 	static async open(options: LogArchiveOptions): Promise<LogArchive> {
 		const archive = new LogArchive(options.path);
@@ -237,6 +251,10 @@ export class LogArchive {
 					for (const statement of ARCHIVE_SCHEMA) await connection.run(statement);
 					archive.#connection = connection;
 					archive.#available = true;
+					// Rows written before `request_id` existed hold NULL, which is not a
+					// verdict for that column, so they are scanned once here. The call is
+					// guarded: a failure is reported on `error` and the open still succeeds.
+					await archive.#backfillRequestIds();
 					break;
 				} catch (error) {
 					// A server that just restarted may still be releasing the lock.
@@ -298,6 +316,55 @@ export class LogArchive {
 	}
 
 	/**
+	 * Migrates the request id of rows written before the column existed.
+	 *
+	 * It runs inside {@link LogArchive.#guard}, so it shares the serialised
+	 * statement queue with every other write and reports a failure on `error`
+	 * instead of letting it escape `open`. The watermark is the highest `seq` the
+	 * migration has looked at, so a capped or interrupted pass carries on from
+	 * there on the next open and no row is scanned twice; a row whose message
+	 * holds no id stays NULL, which is the archive's answer for that row.
+	 */
+	async #backfillRequestIds(): Promise<void> {
+		await this.#guard(undefined, async () => {
+			const connection = this.#connection;
+			if (connection === null) return;
+			// Ceiling of the pass: nothing above the highest `seq` exists yet.
+			const ceiling = rowToMaxSeq(
+				(await connection.runAndReadAll(ARCHIVE_MAX_SEQ_SQL)).getRowObjects()[0],
+			);
+			if (ceiling === null) return;
+			const watermark = rowToBackfillWatermark(
+				(await connection.runAndReadAll(buildRequestIdBackfillStateQuery())).getRowObjects()[0],
+			);
+			// Everything up to the ceiling has been looked at already.
+			if (watermark !== null && watermark >= ceiling) return;
+
+			const { sql, params } = buildRequestIdBackfillQuery({
+				maxSeq: ceiling,
+				afterSeq: watermark,
+				limit: REQUEST_ID_BACKFILL_LIMIT,
+			});
+			const candidates = rowsToBackfillCandidates(
+				(await connection.runAndReadAll(sql, params)).getRowObjects(),
+			);
+			const updates = planRequestIdBackfill(candidates);
+			for (let start = 0; start < updates.length; start += ARCHIVE_INSERT_CHUNK) {
+				const chunk = updates.slice(start, start + ARCHIVE_INSERT_CHUNK);
+				await connection.run(
+					buildRequestIdBackfillUpdate(chunk.length),
+					toRequestIdBackfillParams(chunk),
+				);
+			}
+			// A pass that ran out of rows has seen everything up to the ceiling; a
+			// capped one stopped at the last row it read.
+			const scanned =
+				candidates.length < REQUEST_ID_BACKFILL_LIMIT ? ceiling : maxSeqOf(candidates);
+			await connection.run(buildRequestIdBackfillStateWrite(), [String(scanned ?? ceiling)]);
+		});
+	}
+
+	/**
 	 * Writes one batch of streamed events.
 	 *
 	 * Batches are split into chunks of {@link ARCHIVE_INSERT_CHUNK} rows, and
@@ -336,7 +403,12 @@ export class LogArchive {
 		});
 	}
 
-	/** Bucketed event counts for the chart, per group and level. */
+	/**
+	 * Bucketed counts for the chart, per group and level.
+	 *
+	 * The request is forwarded as it arrives: it carries the grouping that says
+	 * whether a mark counts an event or a request.
+	 */
 	async seriesQuery(request: ArchiveSeriesRequest): Promise<ArchiveSeriesRow[]> {
 		return this.#guard([], async () => {
 			const connection = this.#connection;

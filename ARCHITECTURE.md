@@ -238,11 +238,13 @@ CREATE TABLE log_events (
 	message           VARCHAR NOT NULL,
 	level             VARCHAR,           -- error | warn | info | debug, or NULL
 	level_source      VARCHAR,           -- 'json' when the payload declared it, 'text' when matched
+	request_id        VARCHAR,           -- the request the line belongs to, or NULL
 	seq               BIGINT  NOT NULL DEFAULT nextval('log_events_seq'),
 	archived_at       TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX log_events_unique ON log_events (region, log_group, event_key);
 CREATE INDEX log_events_time ON log_events (region, log_group, timestamp_ms);
+CREATE TABLE archive_meta (key VARCHAR PRIMARY KEY, value VARCHAR);
 ```
 
 `level` and `level_source` are the one inferred pair of columns. CloudWatch has no level field, so the
@@ -263,9 +265,37 @@ The same detection runs for a live stream, so the `level` the UI colours and the
 stores cannot drift apart, and an event replayed from the archive keeps the level that was stored
 rather than being guessed again.
 
+`request_id` is the other inferred column, detected with `detectRequestId` in the same module: a declared
+request id wins (see [Requests](#requests-one-mark-per-request)), and the text form `RequestId: ...` is
+the fallback, because that is how a Lambda prints it. `NULL` means "this line carries no request id",
+which is the normal case for an access log or a database log.
+
 Writes go through `INSERT OR IGNORE` in chunks of 500 rows, so re-scanning a window that is already
 archived changes nothing. A file written before these columns existed is migrated in place with
-`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`; its older rows keep `NULL` levels. `seq` orders events by arrival and is what makes keyset paging stable when
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`; its older rows keep `NULL` levels, and their request ids
+are filled in by the backfill below.
+
+#### The request-id backfill
+
+A file written before `request_id` existed holds rows that were never looked at, and a row with no
+request id is not the same claim as a row whose message has none. Since the detection lives in
+JavaScript, the archive cannot do this in SQL, so it does it once, in a pass that is bounded and
+resumable:
+
+- `archive_meta` holds the watermark `request_id_backfill`: the highest `seq` that has been scanned.
+  An absent watermark means "scan from the start".
+- One pass reads at most `REQUEST_ID_BACKFILL_LIMIT` (20 000) candidate rows with
+  `seq <= max(seq) AND request_id IS NULL ORDER BY seq`, detects their ids, and writes them back in one
+  `UPDATE ... FROM (VALUES ...)` per chunk of 500.
+- It then stores the highest `seq` it actually saw, so an archive larger than the budget finishes on
+  the next open, and an interrupted pass resumes where it stopped.
+- Rows whose message yields no request id stay `NULL` for ever, and are not rescanned: the watermark
+  only moves forward. That is why the scan also takes a lower bound (`seq > watermark`), rather than
+  being driven by `request_id IS NULL` alone - otherwise every pass would start on the same id-less
+  rows and never reach the rows above them.
+
+The pass runs once per open, inside the archive's existing write guard, and a failure is reported
+through the same degradation path as any other archive error instead of failing the open. `seq` orders events by arrival and is what makes keyset paging stable when
 thousands of events share a millisecond; `event_key` is the CloudWatch event id when there is one, and
 a SHA-256 of timestamp, stream and message when there is not (floci and LocalStack omit ids), which
 keeps those events de-duplicable too.
@@ -293,28 +323,72 @@ The two sources provide several groups differently:
 | `archive`    | one SQL statement per page, `WHERE log_group IN (...)`                                                              |
 | `cloudwatch` | one `FilterLogEvents` poll loop per group, merged by `mergeTails` so a busy group is never held back by a quiet one |
 
+### Requests: one mark per request
+
+CloudWatch Logs has no concept of a request, so the app infers one. `src/lib/request-groups.ts` is the
+single place that decides what a request is, and both the log view and the chart call it:
+
+- **Detection** (`detectRequestId`, next to the level detection in `src/lib/log-buffer.ts`): a declared
+  payload key wins - `requestId`, `request_id`, `requestID`, `reqId`, `req_id`, `awsRequestId`,
+  `aws_request_id`, `xRequestId`, `x_request_id`, `x-request-id`, `X-Request-Id` - then the text form
+  `request id[:=] <value>` (any casing, `-`/`_`/space separators), which is the shape a Lambda prints:
+  `START RequestId: 1a2b-... Version: $LATEST`. Values shorter than four characters and placeholders
+  (`none`, `null`, `unknown`, `$LATEST`) are rejected. A **bare UUID is deliberately not** a request id:
+  trace, session and file ids are not requests, and grouping by one would invent requests that never
+  existed.
+- **Grouping** (`collectRequests`, `requestRows`): lines that share an id are one group, wherever they
+  appear in the buffer, across log groups as well as within one - which is what makes an API Gateway
+  request and the Lambda invocation it triggered one request. Lines with no id are never grouped; each
+  keeps its own row and its own mark.
+- **Severity**: a group's level is the **most critical** line in it (`mostCriticalLevel` over
+  `LEVEL_RANK`), so a request with one error among twenty info lines is an error.
+- **Placement**: a request is marked where it **starts** (its first line). A request that logs across a
+  bucket boundary is counted once, in the bucket it started in, not once per bucket it touches - which
+  is why the chart's total can be lower than the number of lines.
+- **The log view** collapses a group into one row (id, line count, span, most critical level, and the
+  worst line as a preview), opened on demand. A group with a single line renders as that line, because
+  there is nothing to expand. The toggle is the log view's **By request** button, on by default and
+  stored under `watch-stream:group-requests`.
+- **The chart** counts requests. The archive does it in SQL; a CloudWatch view does it in
+  `bucketRequests`. Both count a line with no request id as a mark of its own
+  (`coalesce(request_id, event_key)` in SQL), so nothing disappears when grouping is on. The level
+  filter selects a **request** by that group's most critical level, which is the level the mark is drawn
+  in, so the legend and the chips never disagree.
+
 ### The chart (`GET /api/series`, `EventScatterPanel` and `EventScatter`)
 
-The scatter chart above the log view plots event counts over time: X is time, Y is the number of events
-in a bucket, and there is one series per log level. Dragging across it brushes a time range; the page
+The scatter chart above the log view plots event counts over time: X is time, Y is the number of requests
+in a bucket, and there is one series per log level. `by=request` (the default the UI sends) counts
+requests; `by=event` counts lines, which is what the chart did before grouping existed. Dragging across it brushes a time range; the page
 turns that into the next historic window, so the log view re-scopes to exactly the brushed range, and
 `?from=&to=` in the URL follows. A click clears the brush, and the "Reset zoom" control clears it and
 returns to the preset window.
 
 Only the archive can count a whole window server-side, so the chart gets its data two ways:
 
-- `source=archive` calls `GET /api/series?region=&groups=&from=&to=&level=&bucket=`, which runs one
+- `source=archive` calls `GET /api/series?region=&groups=&from=&to=&level=&bucket=&by=`, which runs one
   `GROUP BY` over `log_events`. The bucket is integer arithmetic on `timestamp_ms`
   (`floor(timestamp_ms / bucketMs) * bucketMs`), so it never drifts with a time zone; NULL levels are
   counted as `unknown` rather than dropped; and the window is **not** clamped to CloudWatch's 14 days.
   `bucket` accepts a duration or milliseconds and is otherwise chosen from a ladder so a window lands
-  under ~90 buckets.
+  under ~90 buckets. `by=request` selects the request form: a CTE groups rows by
+  `coalesce(request_id, event_key)`, keeps `min(timestamp_ms)` as the mark's position and the `max` of
+  the level ranks as its level, and the level filter is a `HAVING` on that rank.
 - `source=cloudwatch` buckets the events the view has already streamed (`bucketEvents`), because
   CloudWatch Logs has no aggregate API. The chart then describes exactly what the log view holds.
 
 Both paths produce `SeriesPoint[]`, so the component has one data contract, and the level filter is
 applied in both: the archive query filters rows with `level IN (...)` (so `NULL` rows are left out), and
 the client-side path filters before counting.
+
+The tooltip is styled by the app rather than by layerchart. layerchart's own tooltip rules set
+`background-color` and `color` from `--color-surface-100` / `--color-surface-300` /
+`--color-surface-content`, and the only files that define those variables are its framework presets
+(shadcn-svelte, Skeleton, daisyUI). This app imports none of them, so the variables stay unset and the
+tooltip renders transparent with black text. `EventScatter` therefore passes explicit Tailwind classes
+through layerchart's `classes.container`, and because layerchart's rules live in `@layer components`
+while Tailwind emits `@layer utilities`, those utilities win. The colours are asserted in the browser
+smoke run (`chart tooltip has a background`), which is the only place the property is observable.
 
 The panel and the chart are two components on purpose. `EventScatterPanel` renders the header
 (title, totals, per-level legend, brush hint) and owns a collapse toggle whose choice is stored under
@@ -360,6 +434,7 @@ never sent to the SDK.
 | `missing-region`       | 502    | No region could be resolved from the parameter or AWS config       |
 | `invalid-source`       | 400    | `source` is neither `cloudwatch` nor `archive`                     |
 | `invalid-level`        | 400    | `level` is not a known level, or was used with `source=cloudwatch` |
+| `invalid-group-by`     | 400    | `by` is neither `event` nor `request`                              |
 | `too-many-groups`      | 400    | `groups` names more than 10 log groups                             |
 | `unsupported-source`   | 400    | `/api/series` was asked for a source it cannot aggregate           |
 | `missing-region-param` | 400    | `source=archive` without a region (archived rows are per region)   |

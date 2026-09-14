@@ -6,10 +6,23 @@
  * tested without the driver. Column order matters: {@link ARCHIVE_INSERT_COLUMNS}
  * is the contract with {@link toArchiveParams}, and the `SELECT` in
  * {@link buildPageQuery} uses the same names as {@link rowsToPage}.
+ *
+ * `level` and `request_id` are both derived from the message on the way in, and
+ * both may be NULL in an archive written by an older build. NULL does not mean
+ * the same thing for the two columns: for `level` it is a verdict ("this line
+ * carries no level"), while for `request_id` it means "not looked at yet", since
+ * the client can still detect an id in the message it renders. {@link rowsToPage}
+ * and the request-id backfill below are written from that difference.
  */
 import { createHash } from 'node:crypto';
-import { detectLevelWithSource, isLogLevel, type LogLevel } from '$lib/log-buffer';
-import type { LogEventDto, SeriesLevel } from '$lib/types';
+import {
+	LEVEL_RANK,
+	detectLevelWithSource,
+	detectRequestId,
+	isLogLevel,
+	type LogLevel,
+} from '$lib/log-buffer';
+import type { LogEventDto, SeriesGroupBy, SeriesLevel } from '$lib/types';
 
 /** A value that can be bound to a `?` placeholder. */
 export type ArchiveParam = string | number | bigint | null;
@@ -34,6 +47,7 @@ export const ARCHIVE_SCHEMA: readonly string[] = [
 		message VARCHAR NOT NULL,
 		level VARCHAR,
 		level_source VARCHAR,
+		request_id VARCHAR,
 		seq BIGINT NOT NULL DEFAULT nextval('log_events_seq'),
 		archived_at TIMESTAMP NOT NULL DEFAULT now()
 	)`,
@@ -41,6 +55,11 @@ export const ARCHIVE_SCHEMA: readonly string[] = [
 	// fresh table already has them, and `IF NOT EXISTS` makes both paths safe.
 	`ALTER TABLE log_events ADD COLUMN IF NOT EXISTS level VARCHAR`,
 	`ALTER TABLE log_events ADD COLUMN IF NOT EXISTS level_source VARCHAR`,
+	`ALTER TABLE log_events ADD COLUMN IF NOT EXISTS request_id VARCHAR`,
+	// State that belongs to the file rather than to a log line. It holds the
+	// request-id backfill watermark: the highest `seq` the one-time migration of
+	// pre-column archives has reached, so an interrupted run resumes there.
+	`CREATE TABLE IF NOT EXISTS archive_meta (key VARCHAR PRIMARY KEY, value VARCHAR)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS log_events_unique ON log_events (region, log_group, event_key)`,
 	`CREATE INDEX IF NOT EXISTS log_events_time ON log_events (region, log_group, timestamp_ms)`,
 ];
@@ -57,6 +76,9 @@ export const ARCHIVE_INSERT_COLUMNS: readonly string[] = [
 	'message',
 	'level',
 	'level_source',
+	// Detected fields are appended last so a reader can pair a parameter with its
+	// column by reading the list from the top.
+	'request_id',
 ];
 
 /** Largest number of rows in one `INSERT`; longer batches are chunked. */
@@ -81,7 +103,7 @@ export function archiveEventKey(event: LogEventDto): string {
 	return `h:${digest.slice(0, 32)}`;
 }
 
-/** Renders `count` placeholder rows of ten columns each. */
+/** Renders `count` placeholder rows, one group of columns per row. */
 function placeholderRows(count: number): string {
 	const row = `(${ARCHIVE_INSERT_COLUMNS.map(() => '?').join(', ')})`;
 	return Array.from({ length: count }, () => row).join(', ');
@@ -98,7 +120,12 @@ export function buildInsertSql(rowCount: number): string {
 	return `INSERT OR IGNORE INTO log_events (${ARCHIVE_INSERT_COLUMNS.join(', ')}) VALUES ${placeholderRows(rowCount)}`;
 }
 
-/** Flattens events into the parameter list {@link buildInsertSql} expects. */
+/**
+ * Flattens events into the parameter list {@link buildInsertSql} expects.
+ *
+ * The request id is detected here, exactly like the level, so the archive holds
+ * what a reader of the line would see rather than whatever a writer claimed.
+ */
 export function toArchiveParams(
 	region: string,
 	logGroup: string,
@@ -121,6 +148,9 @@ export function toArchiveParams(
 			event.message,
 			detected.level,
 			detected.source,
+			// A line with no request id is stored as NULL, never as an empty string:
+			// "no id" and "an id that happens to be empty" must not look alike.
+			detectRequestId(event.message),
 		);
 	}
 	return params;
@@ -148,7 +178,7 @@ export type ArchivePageRequest = {
 };
 
 /** Column list shared by {@link buildPageQuery} and {@link rowsToPage}. */
-const PAGE_COLUMNS = `region, log_group, log_stream, event_key, event_id, timestamp_ms, ingestion_time_ms, message, level, level_source, seq`;
+const PAGE_COLUMNS = `region, log_group, log_stream, event_key, event_id, timestamp_ms, ingestion_time_ms, message, level, level_source, request_id, seq`;
 
 /** Escapes `LIKE` metacharacters so a search term is matched literally. */
 export function escapeLike(value: string): string {
@@ -266,6 +296,13 @@ export function rowsToPage(rows: readonly Record<string, unknown>[]): {
 			level: isLogLevel(rawLevel) ? rawLevel : null,
 		};
 		if (group !== null) event.group = group;
+		// A stored request id is sent only when there is one. An archive written
+		// before the column existed holds NULL for every row, and the client can
+		// still detect an id in the message it renders, so "no stored id" must not
+		// be sent as a verdict. That is the opposite of `level`, where NULL is the
+		// archive's own answer and is sent as an explicit `null`.
+		const requestId = toNullableString(pick(row, 'request_id'));
+		if (requestId !== null) event.requestId = requestId;
 		const streamName = toNullableString(pick(row, 'log_stream'));
 		if (streamName !== null) event.streamName = streamName;
 		const ingestionTime = toNumber(pick(row, 'ingestion_time_ms'));
@@ -339,6 +376,180 @@ export function rowsToGroups(rows: readonly Record<string, unknown>[]): ArchiveG
 	return groups;
 }
 
+/**
+ * Row budget of one request-id backfill pass.
+ *
+ * The pass runs on every open, so it has to stay cheap. 20000 messages is a
+ * fraction of a second of regex work, and an archive with more than that scans
+ * the rest on the next open, because the watermark moves.
+ */
+export const REQUEST_ID_BACKFILL_LIMIT = 20_000;
+
+/** `archive_meta` key holding the request-id backfill watermark. */
+const REQUEST_ID_BACKFILL_KEY = 'request_id_backfill';
+
+/** Highest `seq` in the archive: the ceiling of a backfill pass. */
+export const ARCHIVE_MAX_SEQ_SQL = `SELECT max(seq) AS maxSeq FROM log_events`;
+
+/** Reads the single row of {@link ARCHIVE_MAX_SEQ_SQL}; `null` for an empty archive. */
+export function rowToMaxSeq(row: Record<string, unknown> | undefined): number | null {
+	return row === undefined ? null : toNumber(pick(row, 'maxSeq'));
+}
+
+/** Statement that reads the backfill watermark; no row means it never ran. */
+export function buildRequestIdBackfillStateQuery(): string {
+	return `SELECT value FROM archive_meta WHERE key = '${REQUEST_ID_BACKFILL_KEY}'`;
+}
+
+/** Statement that stores the backfill watermark, which is the highest scanned `seq`. */
+export function buildRequestIdBackfillStateWrite(): string {
+	return `INSERT OR REPLACE INTO archive_meta (key, value) VALUES ('${REQUEST_ID_BACKFILL_KEY}', ?)`;
+}
+
+/** Reads the watermark row; an absent row or junk means "scan from the start". */
+export function rowToBackfillWatermark(row: Record<string, unknown> | undefined): number | null {
+	const value = row === undefined ? null : toNumber(pick(row, 'value'));
+	return value === null || value < 0 ? null : value;
+}
+
+/** One archived row the backfill has to look at. */
+export type RequestIdBackfillCandidate = {
+	/** Arrival order of the row; the watermark is a `seq`. */
+	seq: number;
+	region: string;
+	logGroup: string;
+	eventKey: string;
+	message: string;
+};
+
+/** One row whose request id has been detected and must be written back. */
+export type RequestIdBackfillUpdate = {
+	region: string;
+	logGroup: string;
+	eventKey: string;
+	requestId: string;
+};
+
+/** Bound of one backfill scan. */
+export type RequestIdBackfillScan = {
+	/** Highest `seq` the pass may look at. */
+	maxSeq: number;
+	/** Watermark of the previous pass: rows at or below it were looked at already. */
+	afterSeq?: number | null;
+	/** Maximum number of rows to look at. */
+	limit: number;
+};
+
+/**
+ * Builds the scan that finds rows archived before `request_id` existed.
+ *
+ * `seq` is selected although the update does not need it: the caller stores
+ * where the pass stopped. `afterSeq` skips the range a previous pass already
+ * looked at, which is what lets a capped pass resume - a message with no request
+ * id stays NULL for ever, so without the lower bound every pass would start on
+ * the same id-less rows and never reach the rows above them.
+ */
+export function buildRequestIdBackfillQuery(request: RequestIdBackfillScan): {
+	sql: string;
+	params: ArchiveParam[];
+} {
+	const limit = Math.max(1, Math.round(request.limit));
+	// A watermark of 0 is where the first pass starts, so it adds no clause.
+	const scanned = request.afterSeq ?? 0;
+	const after = scanned > 0 ? ' AND seq > ?' : '';
+	const params: ArchiveParam[] = [BigInt(Math.round(request.maxSeq))];
+	if (scanned > 0) params.push(BigInt(Math.round(scanned)));
+	params.push(BigInt(limit));
+	return {
+		sql: `SELECT event_key, log_group, region, message, seq FROM log_events WHERE seq <= ?${after} AND request_id IS NULL ORDER BY seq LIMIT ?`,
+		params,
+	};
+}
+
+/** Maps the rows of {@link buildRequestIdBackfillQuery}, dropping unusable ones. */
+export function rowsToBackfillCandidates(
+	rows: readonly Record<string, unknown>[],
+): RequestIdBackfillCandidate[] {
+	const candidates: RequestIdBackfillCandidate[] = [];
+	for (const row of rows) {
+		const seq = toNumber(pick(row, 'seq'));
+		const region = pick(row, 'region');
+		const logGroup = pick(row, 'log_group');
+		const eventKey = pick(row, 'event_key');
+		const message = pick(row, 'message');
+		if (
+			seq === null ||
+			typeof region !== 'string' ||
+			typeof logGroup !== 'string' ||
+			typeof eventKey !== 'string' ||
+			typeof message !== 'string'
+		) {
+			continue;
+		}
+		candidates.push({ seq, region, logGroup, eventKey, message });
+	}
+	return candidates;
+}
+
+/** Highest `seq` of a scanned set, or `null` when nothing was scanned. */
+export function maxSeqOf(candidates: readonly RequestIdBackfillCandidate[]): number | null {
+	let highest: number | null = null;
+	for (const candidate of candidates) {
+		if (highest === null || candidate.seq > highest) highest = candidate.seq;
+	}
+	return highest;
+}
+
+/**
+ * Detects the request id of every candidate.
+ *
+ * A message that yields no id is dropped rather than written as an empty string:
+ * it is a finished row, not a failure, and the watermark moves past it so it is
+ * never looked at again.
+ */
+export function planRequestIdBackfill(
+	candidates: readonly RequestIdBackfillCandidate[],
+): RequestIdBackfillUpdate[] {
+	const updates: RequestIdBackfillUpdate[] = [];
+	for (const candidate of candidates) {
+		const requestId = detectRequestId(candidate.message);
+		if (requestId === null) continue;
+		updates.push({
+			region: candidate.region,
+			logGroup: candidate.logGroup,
+			eventKey: candidate.eventKey,
+			requestId,
+		});
+	}
+	return updates;
+}
+
+/**
+ * Builds one `UPDATE ... FROM (VALUES ...)` that writes many ids at once.
+ *
+ * One statement per chunk instead of one per row keeps a 20000-row pass down to
+ * a handful of statements, and the predicate is an exact row match on the unique
+ * index (`region`, `log_group`, `event_key`).
+ */
+export function buildRequestIdBackfillUpdate(rowCount: number): string {
+	if (!Number.isInteger(rowCount) || rowCount < 1) {
+		throw new RangeError(`rowCount must be a positive integer, received ${String(rowCount)}`);
+	}
+	const rows = Array.from({ length: rowCount }, () => '(?, ?, ?, ?)').join(', ');
+	return `UPDATE log_events SET request_id = v.request_id FROM (VALUES ${rows}) AS v(region, log_group, event_key, request_id) WHERE log_events.region = v.region AND log_events.log_group = v.log_group AND log_events.event_key = v.event_key`;
+}
+
+/** Flattens updates into the parameter list {@link buildRequestIdBackfillUpdate} expects. */
+export function toRequestIdBackfillParams(
+	updates: readonly RequestIdBackfillUpdate[],
+): ArchiveParam[] {
+	const params: ArchiveParam[] = [];
+	for (const update of updates) {
+		params.push(update.region, update.logGroup, update.eventKey, update.requestId);
+	}
+	return params;
+}
+
 /** One bucket of the chart series query. */
 export type ArchiveSeriesRow = {
 	/** Bucket start, epoch ms. */
@@ -346,6 +557,7 @@ export type ArchiveSeriesRow = {
 	group: string;
 	/** Level of the events in this bucket; `unknown` when the level is NULL. */
 	level: SeriesLevel;
+	/** Events in the bucket, or requests when the query counted requests. */
 	events: number;
 };
 
@@ -359,7 +571,57 @@ export type ArchiveSeriesRequest = {
 	bucketMs: number;
 	/** Levels to count, or `null` for every level. */
 	levels?: readonly LogLevel[] | null;
+	/**
+	 * What one mark counts. `event` (the default) counts lines, which is the
+	 * statement this app has always run; `request` counts requests, so an incident
+	 * reads as the number of affected requests instead of the number of lines
+	 * they wrote.
+	 */
+	by?: SeriesGroupBy;
 };
+
+/** Levels and their rank, highest first; `unknown` is left to the `ELSE` branch. */
+function rankArms(): [string, number][] {
+	return Object.entries(LEVEL_RANK).filter(([level]) => level !== 'unknown');
+}
+
+/**
+ * SQL `CASE` that turns a level into its severity rank.
+ *
+ * Generated from {@link LEVEL_RANK} so the ranks have one source of truth: the
+ * statement and the UI cannot disagree about which level is worse.
+ */
+function levelRankCase(expression: string): string {
+	const arms = rankArms().map(([level, rank]) => `WHEN '${level}' THEN ${rank}`);
+	return `CASE ${expression} ${arms.join(' ')} ELSE ${LEVEL_RANK.unknown} END`;
+}
+
+/** SQL `CASE` that turns a severity rank back into a level name. */
+function levelNameCase(expression: string): string {
+	const arms = rankArms().map(([level, rank]) => `WHEN ${rank} THEN '${level}'`);
+	return `CASE ${expression} ${arms.join(' ')} ELSE 'unknown' END`;
+}
+
+/** The `WHERE` clause both series forms share: one region, one window, one or more groups. */
+function seriesScope(
+	request: ArchiveSeriesRequest,
+	groups: readonly string[],
+): { where: string[]; params: ArchiveParam[] } {
+	return {
+		where: [
+			'region = ?',
+			`log_group IN (${groups.map(() => '?').join(', ')})`,
+			'timestamp_ms >= ?',
+			'timestamp_ms <= ?',
+		],
+		params: [
+			request.region,
+			...groups,
+			BigInt(Math.round(request.startTime)),
+			BigInt(Math.round(request.endTime)),
+		],
+	};
+}
 
 /**
  * Builds the bucketed counts behind the chart.
@@ -368,6 +630,9 @@ export type ArchiveSeriesRequest = {
  * `timestamp_ms`, so it cannot drift with a time zone; NULL levels are reported
  * as `unknown` rather than dropped; and a level filter matches only rows that
  * carry one of the requested levels.
+ *
+ * `by: 'request'` selects the request form below; `by: 'event'` (the default)
+ * keeps the event form unchanged.
  */
 export function buildSeriesQuery(request: ArchiveSeriesRequest): {
 	sql: string;
@@ -375,22 +640,14 @@ export function buildSeriesQuery(request: ArchiveSeriesRequest): {
 } {
 	const bucketMs = Math.max(1, Math.round(request.bucketMs));
 	const groups = request.logGroups.length > 0 ? request.logGroups : [''];
-	const where: string[] = [
-		'region = ?',
-		`log_group IN (${groups.map(() => '?').join(', ')})`,
-		'timestamp_ms >= ?',
-		'timestamp_ms <= ?',
-	];
+	const scope = seriesScope(request, groups);
+	if (request.by === 'request') {
+		return buildRequestSeriesQuery(request, bucketMs, scope.where, scope.params);
+	}
 	// Bind order follows the statement: the bucket arithmetic appears in the
-	// SELECT clause, so its two placeholders come first.
-	const params: ArchiveParam[] = [
-		BigInt(bucketMs),
-		BigInt(bucketMs),
-		request.region,
-		...groups,
-		BigInt(Math.round(request.startTime)),
-		BigInt(Math.round(request.endTime)),
-	];
+	// SELECT clause before the `WHERE`, so its two placeholders come first.
+	const params: ArchiveParam[] = [BigInt(bucketMs), BigInt(bucketMs), ...scope.params];
+	const where = scope.where.slice();
 	const levels = request.levels ?? [];
 	if (levels.length > 0) {
 		where.push(`level IN (${levels.map(() => '?').join(', ')})`);
@@ -400,6 +657,47 @@ export function buildSeriesQuery(request: ArchiveSeriesRequest): {
 		sql: `SELECT CAST(floor(timestamp_ms / ?) * ? AS BIGINT) AS bucket, log_group, coalesce(level, 'unknown') AS level, count(*) AS events FROM log_events WHERE ${where.join(' AND ')} GROUP BY bucket, log_group, level ORDER BY bucket, log_group, level`,
 		params,
 	};
+}
+
+/**
+ * Builds the request form: one mark per request instead of one per line.
+ *
+ * `coalesce(request_id, event_key)` makes a line with no request id a request of
+ * its own, so no line is dropped. A request is placed at its FIRST line
+ * (`min(timestamp_ms)`) and counted once, and it takes the WORST level of its
+ * lines (`max` of the ranks). A level filter selects on that same worst level in
+ * the `HAVING`: asking for errors keeps every request that logged one, whatever
+ * else it logged, and drops the requests that stayed below it.
+ *
+ * BIND ORDER: DuckDB binds `?` positionally in statement text order, and the CTE
+ * comes first, so the parameters are the scope ones, then one rank per requested
+ * level (the RANKS, not the level names), and the bucket width LAST - the
+ * opposite of the event form above.
+ */
+function buildRequestSeriesQuery(
+	request: ArchiveSeriesRequest,
+	bucketMs: number,
+	where: readonly string[],
+	scopeParams: readonly ArchiveParam[],
+): { sql: string; params: ArchiveParam[] } {
+	const levels = request.levels ?? [];
+	const having =
+		levels.length > 0 ? ` HAVING level_rank IN (${levels.map(() => '?').join(', ')})` : '';
+	const params: ArchiveParam[] = [
+		...scopeParams,
+		...levels.map((level) => LEVEL_RANK[level]),
+		BigInt(bucketMs),
+		BigInt(bucketMs),
+	];
+	const sql = [
+		'WITH requests AS (',
+		`SELECT coalesce(request_id, event_key) AS request_key, log_group, min(timestamp_ms) AS start_ms, max(${levelRankCase(`coalesce(level, 'unknown')`)}) AS level_rank`,
+		`FROM log_events WHERE ${where.join(' AND ')}`,
+		`GROUP BY request_key, log_group${having})`,
+		`SELECT CAST(floor(start_ms / ?) * ? AS BIGINT) AS bucket, log_group, ${levelNameCase('level_rank')} AS level, count(*) AS events`,
+		'FROM requests GROUP BY bucket, log_group, level ORDER BY bucket, log_group, level',
+	].join(' ');
+	return { sql, params };
 }
 
 /** Maps the rows of {@link buildSeriesQuery} onto chart points. */

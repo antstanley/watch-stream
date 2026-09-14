@@ -100,6 +100,7 @@ function stubApi(input: string): Promise<Response> {
 	}
 	if (url.pathname === '/api/series') {
 		return json({
+			groupBy: url.searchParams.get('by') ?? 'event',
 			from: 1_700_000_000_000,
 			to: 1_700_000_900_000,
 			bucketMs: 60_000,
@@ -118,6 +119,14 @@ function stubApi(input: string): Promise<Response> {
 		return json({ region: 'us-east-1', endpoint: null, source, groups });
 	}
 	return Promise.resolve(new Response('not found', { status: 404 }));
+}
+
+/**
+ * Text of an element with runs of whitespace collapsed, so an assertion does not
+ * depend on where the template happens to wrap.
+ */
+function text(testId: string): string {
+	return (screen.getByTestId(testId).textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
 /** JSON response for the stubbed API. */
@@ -321,9 +330,7 @@ describe('page: the event chart', () => {
 		const seriesUrl = requested.find((url) => url.includes('/api/series')) ?? '';
 		expect(seriesUrl).toContain('groups=%2Faws%2Fapp');
 		expect(seriesUrl).toContain('source=archive');
-		await waitFor(() =>
-			expect(screen.getByTestId('scatter-summary').textContent).toContain('2 events'),
-		);
+		await waitFor(() => expect(text('scatter-summary')).toContain('2 requests'));
 	});
 
 	it('sends the level filter to the series request', async () => {
@@ -347,5 +354,46 @@ describe('page: the event chart', () => {
 		await fireEvent.click(screen.getAllByTestId('group-row')[0] as HTMLElement);
 		await waitFor(() => expect(screen.getByTestId('event-scatter')).toBeTruthy());
 		expect(requested.some((url) => url.includes('/api/series'))).toBe(false);
+	});
+});
+
+describe('page: grouping by request', () => {
+	it('asks the archive to count requests by default', async () => {
+		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
+		await renderPage();
+
+		await waitFor(() =>
+			expect(
+				requested.some((url) => url.includes('/api/series') && url.includes('by=request')),
+			).toBe(true),
+		);
+	});
+
+	it('switches the chart to lines, and remembers the choice, when grouping is turned off', async () => {
+		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
+		await renderPage();
+		await waitFor(() => expect(requested.some((url) => url.includes('/api/series'))).toBe(true));
+		requested.length = 0;
+
+		await fireEvent.click(screen.getByTestId('group-toggle'));
+		await waitFor(() =>
+			expect(requested.some((url) => url.includes('/api/series') && url.includes('by=event'))).toBe(
+				true,
+			),
+		);
+		expect(localStorage.getItem('watch-stream:group-requests')).toBe('false');
+	});
+
+	it('starts grouped off when the stored preference says so', async () => {
+		localStorage.setItem('watch-stream:group-requests', 'false');
+		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
+		await renderPage();
+
+		await waitFor(() =>
+			expect(requested.some((url) => url.includes('/api/series') && url.includes('by=event'))).toBe(
+				true,
+			),
+		);
+		expect(screen.getByTestId('group-toggle').getAttribute('aria-pressed')).toBe('false');
 	});
 });
