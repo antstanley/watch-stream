@@ -1,5 +1,45 @@
 # watch-tail
 
+## 0.6.0
+
+### Minor Changes
+
+- [#15](https://github.com/antstanley/watch-stream/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-stream/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Group the lines of a request into one row, in the log view and in the chart.
+
+  A request id is read from each line - a declared `requestId` (also `request_id`, `awsRequestId`,
+  `x-request-id`) or the `RequestId: ...` a Lambda prints - and the lines that share it become one row in
+  the log view: the request id, how many lines it wrote, how long it took, and the level of its most
+  critical line. Click the row to open every line, indented and in order.
+
+  The chart counts one mark per request instead of one per line, placed where the request started and
+  coloured by that same most critical level, so a spike of failing requests is a spike of marks rather
+  than a spike of log volume. The archive answers that in one SQL statement, and a CloudWatch view
+  buckets the requests it has already streamed.
+
+  It is on by default and the log view's **By request** button turns it off, which the app remembers.
+  Lines with no request id are never grouped, so nothing is hidden by an id the log did not have.
+
+### Patch Changes
+
+- [#15](https://github.com/antstanley/watch-stream/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-stream/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Give the chart tooltip a background.
+
+  layerchart draws its tooltip with colours that come from `--color-surface-*` variables, which only its
+  framework presets (shadcn-svelte, Skeleton, daisyUI) define. This app imports none of them, so the
+  tooltip rendered fully transparent with black text - unreadable over a dark chart. It now carries its
+  own panel styling (dark background, border, light text, elevation shadow), and the browser smoke run
+  checks the rendered colours so it cannot regress unnoticed.
+
+- [#15](https://github.com/antstanley/watch-stream/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-stream/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Make Ctrl+C stop the CLI while a prompt is open.
+
+  Cancelling one of the CLI's questions (the login offer, the profile picker) was read as "No" - so
+  Ctrl+C at that prompt looked like it did nothing, and the process carried on with its server still
+  running. Worse, the question left the terminal in raw mode, where Ctrl+C no longer produces a signal at
+  all, so every later attempt in that terminal was swallowed too.
+
+  A cancelled prompt is now a stop: the CLI says `Cancelled.`, shuts the server down, prints `stopped`,
+  exits like any other Ctrl+C, and hands the terminal back in its normal state. If a terminal was already
+  left in raw mode by an earlier version, `stty sane` repairs it.
+
 ## 0.5.0
 
 ### Minor Changes
