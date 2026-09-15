@@ -171,6 +171,21 @@ The stream stops when the browser disconnects (`request.signal` aborts).
 
 The `ready` payload also carries `source`, so a client always knows which feed it is reading.
 
+### Stopping a streaming server
+
+A live tail is a connection that never finishes on its own, and adapter-node shuts down gracefully: on
+`SIGINT`/`SIGTERM` it stops accepting connections and waits for the in-flight ones to close,
+force-closing them only after `SHUTDOWN_TIMEOUT` (thirty seconds by default). With a browser attached,
+that grace period is the whole delay - Ctrl+C looked like it did nothing for half a minute.
+
+Every SSE response therefore registers itself in `src/lib/server/live-streams.ts` when it starts and
+unregisters when it ends. A signal closes them all at once, and each one writes an `end` frame with
+`reason: server-stopping` before closing, so the browser is told why the stream ended instead of seeing a
+dead socket. The graceful shutdown then completes in the same tick. The CLI (`src/cli/server.ts`) and the
+dev launcher also pass a two-second `SHUTDOWN_TIMEOUT` as an outer bound for anything else that is still
+connected. `tests/shutdown.spec.ts` runs the built server with a live tail attached and asserts that it
+exits promptly, which is the regression this exists to prevent.
+
 ## Reading the archive (`source=archive`)
 
 `GET /api/stream?source=archive&region=<region>&group=<group>` replays events from the local DuckDB

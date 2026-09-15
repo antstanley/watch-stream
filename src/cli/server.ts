@@ -14,6 +14,16 @@ import { fileURLToPath } from 'node:url';
 const SERVER_ENTRY = join('build', 'index.js');
 
 /**
+ * How long the server may wait for open connections when it stops, in seconds.
+ *
+ * The app ends its own event streams when it is asked to stop, so its graceful
+ * shutdown normally completes at once; this is the outer bound for anything else
+ * that is still connected. adapter-node's default is thirty seconds, which is
+ * what made a Ctrl+C look like it had not stopped the server.
+ */
+export const SHUTDOWN_TIMEOUT_SECONDS = 2;
+
+/**
  * Walks up from the compiled CLI file until it finds `build/index.js`.
  *
  * Works both from `dist/cli/` in an installed package and from `src/cli/` in
@@ -79,6 +89,7 @@ export function startServer(input: StartServerInput): ChildProcess {
 		PORT: String(input.port),
 		HOST: input.host,
 		ORIGIN: uiUrl(input.host, input.port),
+		SHUTDOWN_TIMEOUT: String(SHUTDOWN_TIMEOUT_SECONDS),
 	};
 	return spawn(process.execPath, [join(input.appRoot, SERVER_ENTRY)], {
 		cwd: input.appRoot,

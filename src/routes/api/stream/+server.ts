@@ -1,6 +1,7 @@
 import type { CloudWatchLogsClient } from '@aws-sdk/client-cloudwatch-logs';
 import { type RequestEvent } from '@sveltejs/kit';
 import { apiError } from '$lib/server/api';
+import { registerLiveStream } from '$lib/server/live-streams';
 import { getArchive, type LogArchive } from '$lib/server/archive';
 import { tailArchivedEvents } from '$lib/server/archive-tail';
 import {
@@ -315,6 +316,8 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 
 	const encoder = new TextEncoder();
 	let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+	/** Removes this stream from the server's registry of open streams. */
+	let unregisterStream: (() => void) | undefined;
 	let closed = false;
 	let pingTimer: ReturnType<typeof setTimeout> | undefined;
 	let cleanedUp = false;
@@ -380,6 +383,8 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 		if (cleanedUp) return;
 		cleanedUp = true;
 		clearPing();
+		unregisterStream?.();
+		unregisterStream = undefined;
 		request.signal.removeEventListener('abort', onAbort);
 		feed.release();
 	};
@@ -452,6 +457,9 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 			};
 			enqueue(sseFrame('ready', payload));
 			armPing();
+			// A live tail is the connection that keeps a graceful shutdown waiting,
+			// so the server can end it the moment it is asked to stop.
+			unregisterStream = registerLiveStream(() => writeEnd('server-stopping'));
 			void pump();
 		},
 		cancel() {

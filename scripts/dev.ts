@@ -24,6 +24,9 @@ import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The graceful-shutdown bound is the CLI's, so both launchers stop the server the
+// same way instead of keeping two copies of the same number.
+import { SHUTDOWN_TIMEOUT_SECONDS } from '../src/cli/server.ts';
 import {
 	LOCAL_ENV_FILE,
 	LOCAL_OVERRIDE_KEYS,
@@ -233,6 +236,9 @@ function runChild(env: NodeJS.ProcessEnv, options: RunOptions): Promise<number> 
 		command = process.execPath;
 		args = [join(rootDir, 'build', 'index.js')];
 		if (options.port !== null) childEnv.PORT = String(options.port);
+		// The app closes its own streams on a signal, so this is only the outer
+		// bound: adapter-node's thirty-second default reads as a hung Ctrl+C.
+		childEnv.SHUTDOWN_TIMEOUT = String(SHUTDOWN_TIMEOUT_SECONDS);
 	} else {
 		args = ['dev'];
 		if (options.port !== null) args.push('--port', String(options.port), '--strictPort');
