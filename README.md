@@ -118,9 +118,11 @@ watch-tail [options]
   -v, --version          Show the version
 ```
 
-The CLI keeps the terminal while it runs: `Ctrl+C` stops the server and exits, whether it is idle or
-waiting at one of its questions (the login offer, the profile picker) - cancelling a question is a stop,
-not a "no".
+The CLI keeps the terminal while it runs: `Ctrl+C` stops the server and exits - whether it is idle,
+whether it is waiting at one of its questions (the login offer, the profile picker, where cancelling is a
+stop rather than a "no"), and whether a browser is streaming from it. An open live tail never ends on its
+own, so the app ends its own streams when it is asked to stop instead of letting them hold the shutdown
+open.
 
 Shell completions come from [`@bomb.sh/tab`](https://bomb.sh): flags, `--region` values from the
 CloudWatch Logs region list, and `--profile` values from your own `~/.aws/config`. zsh, bash, fish and

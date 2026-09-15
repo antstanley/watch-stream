@@ -38,11 +38,9 @@ jobs:
         image: floci/floci:latest
         ports:
           - 4566:4566
-        options: >-
-          --health-cmd "curl -fsS http://localhost:4566/ || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
+        # No health check on purpose: the image ships no curl, wget or nc, so a
+        # `--health-cmd` cannot run inside it (it exits 127) and the container
+        # never reports healthy. The job waits for the emulator on its own below.
     env:
       AWS_ENDPOINT_URL: http://localhost:4566
       AWS_ACCESS_KEY_ID: test
@@ -60,6 +58,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # The service has no health check, so wait for the emulator itself.
+      - run: npx --yes wait-on http://localhost:4566/ --timeout 120000
       # The fixtures the integration suite scans for.
       - run: node scripts/seed-floci.ts
       - run: pnpm test:e2e
@@ -73,11 +73,9 @@ jobs:
         image: floci/floci:latest
         ports:
           - 4566:4566
-        options: >-
-          --health-cmd "curl -fsS http://localhost:4566/ || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
+        # No health check on purpose: the image ships no curl, wget or nc, so a
+        # `--health-cmd` cannot run inside it (it exits 127) and the container
+        # never reports healthy. The job waits for the emulator on its own below.
     env:
       AWS_ENDPOINT_URL: http://localhost:4566
       AWS_ACCESS_KEY_ID: test
@@ -95,6 +93,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # The service has no health check, so wait for the emulator itself.
+      - run: npx --yes wait-on http://localhost:4566/ --timeout 120000
       - run: node scripts/seed-floci.ts
       # Playwright's own Chromium: the CLI defaults to Google Chrome, which CI
       # does not have, so the smoke run asks for `chromium` explicitly.
