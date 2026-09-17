@@ -14,6 +14,7 @@
  * the client can still detect an id in the message it renders. {@link rowsToPage}
  * and the request-id backfill below are written from that difference.
  */
+import { eventDurationMs } from '$lib/request-duration';
 import { createHash } from 'node:crypto';
 import {
 	LEVEL_RANK,
@@ -22,7 +23,7 @@ import {
 	isLogLevel,
 	type LogLevel,
 } from '$lib/log-buffer';
-import type { LogEventDto, SeriesGroupBy, SeriesLevel } from '$lib/types';
+import type { LogEventDto, SeriesGroupBy, SeriesLevel, SeriesMetric } from '$lib/types';
 
 /** A value that can be bound to a `?` placeholder. */
 export type ArchiveParam = string | number | bigint | null;
@@ -552,6 +553,8 @@ export function toRequestIdBackfillParams(
 
 /** One bucket of the chart series query. */
 export type ArchiveSeriesRow = {
+	durationMs?: number;
+	requestId?: string;
 	/** Bucket start, epoch ms. */
 	t: number;
 	group: string;
@@ -563,6 +566,7 @@ export type ArchiveSeriesRow = {
 
 /** Request for {@link buildSeriesQuery}. */
 export type ArchiveSeriesRequest = {
+	metric?: SeriesMetric;
 	region: string;
 	logGroups: readonly string[];
 	startTime: number;
@@ -641,6 +645,8 @@ export function buildSeriesQuery(request: ArchiveSeriesRequest): {
 	const bucketMs = Math.max(1, Math.round(request.bucketMs));
 	const groups = request.logGroups.length > 0 ? request.logGroups : [''];
 	const scope = seriesScope(request, groups);
+	if (request.metric === 'duration')
+		return buildDurationSeriesQuery(request, scope.where, scope.params);
 	if (request.by === 'request') {
 		return buildRequestSeriesQuery(request, bucketMs, scope.where, scope.params);
 	}
@@ -700,6 +706,28 @@ function buildRequestSeriesQuery(
 	return { sql, params };
 }
 
+/** Duration points are not bucketed: one point at each request's first observed timestamp. */
+function buildDurationSeriesQuery(
+	request: ArchiveSeriesRequest,
+	where: readonly string[],
+	scopeParams: readonly ArchiveParam[],
+): { sql: string; params: ArchiveParam[] } {
+	const levels = request.levels ?? [];
+	const having = levels.length ? ` HAVING level_rank IN (${levels.map(() => '?').join(', ')})` : '';
+	return {
+		sql: `WITH requests AS (
+			SELECT request_id, log_group, min(timestamp_ms) AS start_ms,
+			max(timestamp_ms) - min(timestamp_ms) AS duration_ms,
+			first(message ORDER BY timestamp_ms DESC, seq DESC) AS last_message,
+			max(${levelRankCase("coalesce(level, 'unknown')")}) AS level_rank
+			FROM log_events WHERE ${where.join(' AND ')} AND request_id IS NOT NULL AND request_id <> ''
+			GROUP BY request_id, log_group${having})
+			SELECT start_ms AS bucket, log_group, ${levelNameCase('level_rank')} AS level,
+			1 AS events, request_id, duration_ms, last_message FROM requests ORDER BY bucket, log_group, request_id`,
+		params: [...scopeParams, ...levels.map((level) => LEVEL_RANK[level])],
+	};
+}
+
 /** Maps the rows of {@link buildSeriesQuery} onto chart points. */
 export function rowsToSeries(rows: readonly Record<string, unknown>[]): ArchiveSeriesRow[] {
 	const points: ArchiveSeriesRow[] = [];
@@ -713,6 +741,14 @@ export function rowsToSeries(rows: readonly Record<string, unknown>[]): ArchiveS
 			group,
 			level: typeof level === 'string' && level.length > 0 ? (level as SeriesLevel) : 'unknown',
 			events: toNumber(pick(row, 'events')) ?? 0,
+			...(typeof row.request_id === 'string'
+				? {
+						requestId: row.request_id,
+						durationMs:
+							(toNumber(row.duration_ms) ?? 0) +
+							eventDurationMs(typeof row.last_message === 'string' ? row.last_message : ''),
+					}
+				: {}),
 		});
 	}
 	return points;

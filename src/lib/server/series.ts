@@ -12,6 +12,7 @@ import type { ArchiveSeriesRow } from './archive-sql';
 import { parseDurationMs } from './filter';
 import type {
 	SeriesGroupBy,
+	SeriesMetric,
 	SeriesGroupTotal,
 	SeriesLevel,
 	SeriesLevelTotal,
@@ -22,6 +23,13 @@ import type {
 /** Message used when a caller asks for a series the app cannot aggregate. */
 export const SERIES_SOURCE_HINT =
 	'Series are only aggregated for source=archive; a live CloudWatch view buckets the events it has loaded';
+
+/** Missing metrics retain counts; unsupported metrics must not silently select a chart. */
+export function parseMetricParam(value: string | null): SeriesMetric | null {
+	const metric = value?.trim().toLowerCase();
+	if (!metric || metric === 'count') return 'count';
+	return metric === 'duration' ? 'duration' : null;
+}
 
 /** Message used when the `by` parameter names something that is not a grouping. */
 export const GROUP_BY_PARAM_HINT = 'Invalid by: expected "event" or "request"';
@@ -142,6 +150,9 @@ export function buildSeriesResponse(input: {
 		group: row.group,
 		level: row.level,
 		events: row.events,
+		...(row.durationMs === undefined
+			? {}
+			: { durationMs: row.durationMs, requestId: row.requestId }),
 	}));
 	return {
 		from: input.from,
@@ -166,6 +177,7 @@ export function buildSeriesResponse(input: {
  * mark counts and defaults to one mark per event.
  */
 export async function readSeries(input: {
+	metric?: SeriesMetric;
 	archive: LogArchive;
 	region: string;
 	logGroups: readonly string[];
@@ -177,7 +189,7 @@ export async function readSeries(input: {
 	by?: SeriesGroupBy | null;
 }): Promise<SeriesResponse> {
 	const bucketMs = input.bucketMs ?? chooseBucketMs(input.to - input.from);
-	const groupBy = input.by ?? 'event';
+	const groupBy = input.metric === 'duration' ? 'request' : (input.by ?? 'event');
 	const empty = buildSeriesResponse({
 		from: input.from,
 		to: input.to,
@@ -194,6 +206,7 @@ export async function readSeries(input: {
 		bucketMs,
 		levels: input.levels ?? null,
 		by: groupBy,
+		...(input.metric === undefined ? {} : { metric: input.metric }),
 	});
 	return buildSeriesResponse({ from: input.from, to: input.to, bucketMs, groupBy, rows });
 }

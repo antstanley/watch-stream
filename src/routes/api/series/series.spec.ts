@@ -40,6 +40,24 @@ async function errorOf(response: Response): Promise<{ code?: string }> {
 }
 
 describe('GET /api/series', () => {
+	test('duration mode always requests per-request spans and rejects unknown metrics', async () => {
+		const response = await GET(
+			event({
+				source: 'archive',
+				region: 'eu-west-1',
+				group: '/a',
+				metric: 'duration',
+				by: 'event',
+			}) as never,
+		);
+		expect(response.status).toBe(200);
+		expect((await response.json()).groupBy).toBe('request');
+		expect(state.calls[0]).toMatchObject({ metric: 'duration', by: 'request' });
+		const bad = await GET(event({ source: 'archive', group: '/a', metric: 'average' }) as never);
+		expect(bad.status).toBe(400);
+		expect(await bad.json()).toMatchObject({ code: 'invalid-metric' });
+	});
+
 	beforeEach(() => {
 		envState.current = { AWS_REGION: 'eu-west-1' };
 		state.available = true;

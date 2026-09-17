@@ -109,7 +109,11 @@ function stubApi(input: string): Promise<Response> {
 			points: [
 				{ t: 1_700_000_000_000, group: '/aws/app', level: 'error', events: 1 },
 				{ t: 1_700_000_060_000, group: '/aws/app', level: 'error', events: 1 },
-			],
+			].map((point, index) =>
+				url.searchParams.get('metric') === 'duration'
+					? Object.assign(point, { durationMs: 50 + index, requestId: `request-${index}` })
+					: point,
+			),
 			totals: { events: 2, points: 2 },
 		});
 	}
@@ -321,6 +325,23 @@ describe('page: several groups at once', () => {
 });
 
 describe('page: the event chart', () => {
+	it('toggles duration and count without changing the log grouping preference', async () => {
+		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
+		await renderPage();
+		expect(screen.getByTestId('chart-metric-count').getAttribute('aria-pressed')).toBe('true');
+		await fireEvent.click(screen.getByTestId('chart-metric-duration'));
+		await waitFor(() =>
+			expect(requested.some((url) => url.includes('metric=duration'))).toBe(true),
+		);
+		expect(screen.getByTestId('chart-metric-duration').getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByTestId('duration-note').textContent).toContain('last event');
+		expect(screen.getByTestId('group-toggle').getAttribute('aria-pressed')).toBe('true');
+		requested.length = 0;
+		await fireEvent.click(screen.getByTestId('chart-metric-count'));
+		await waitFor(() => expect(requested.some((url) => url.includes('metric=count'))).toBe(true));
+		expect(screen.queryByTestId('duration-note')).toBeNull();
+	});
+
 	it('renders the chart above the log view and counts the archive window', async () => {
 		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
 		await renderPage();

@@ -13,6 +13,7 @@ import type {
 	LogGroupsResponse,
 	RegionsResponse,
 	SeriesGroupBy,
+	SeriesMetric,
 	SeriesResponse,
 	StreamSource,
 } from './types';
@@ -58,6 +59,7 @@ export type SeriesQuery = RequestOptions & {
 	bucketMs?: number;
 	/** Count requests instead of lines; omitted counts lines. */
 	by?: SeriesGroupBy;
+	metric?: SeriesMetric;
 };
 
 /** Error carrying the parsed `ApiErrorBody` returned by the API. */
@@ -125,6 +127,7 @@ function buildSeriesUrl(query: {
 	levels?: readonly string[];
 	bucketMs?: number;
 	by?: SeriesGroupBy;
+	metric?: SeriesMetric;
 }): string {
 	const search = new URLSearchParams();
 	if (query.region) search.set('region', query.region);
@@ -139,6 +142,7 @@ function buildSeriesUrl(query: {
 	}
 	const levels = (query.levels ?? []).filter((level) => level.length > 0);
 	if (levels.length > 0) search.set('level', levels.join(','));
+	if (query.metric) search.set('metric', query.metric);
 	if (query.by === 'request' || query.by === 'event') search.set('by', query.by);
 	if (typeof query.bucketMs === 'number' && Number.isFinite(query.bucketMs) && query.bucketMs > 0) {
 		search.set('bucket', String(Math.round(query.bucketMs)));

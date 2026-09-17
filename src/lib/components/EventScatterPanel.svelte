@@ -12,7 +12,7 @@
 	import { formatCount } from '$lib/format';
 	import { SERIES_LEVEL_COLOR, groupByLevel } from '$lib/series-buckets';
 	import { STORAGE_KEYS } from '$lib/resize';
-	import type { SeriesPoint } from '$lib/types';
+	import type { SeriesPoint, SeriesMetric } from '$lib/types';
 	import type { BrushRange } from './EventScatter.svelte';
 
 	/** Props the lazily loaded chart takes. */
@@ -37,6 +37,8 @@
 	const loadChartModule: ChartLoader = () => import('./EventScatter.svelte');
 
 	type Props = {
+		metric?: SeriesMetric;
+		onMetricChange?: (metric: SeriesMetric) => void;
 		/** Bucketed counts for the window. */
 		points?: SeriesPoint[];
 		/** Inclusive start of the window, epoch ms. */
@@ -62,6 +64,8 @@
 	};
 
 	let {
+		metric = 'count',
+		onMetricChange,
 		points = [],
 		from = 0,
 		to = 0,
@@ -146,7 +150,7 @@
 	/** True when there is something to draw. */
 	let hasPoints = $derived(points.length > 0);
 	/** What one mark stands for, which is what the totals count. */
-	let unit = $derived(byRequest ? 'requests' : 'events');
+	let unit = $derived(metric === 'duration' || byRequest ? 'requests' : 'events');
 
 	/** Clears the brush, for the host's Reset zoom control. */
 	export function reset(): void {
@@ -158,7 +162,7 @@
 <section
 	class="flex min-w-0 flex-col gap-1 rounded-lg border border-neutral-800 bg-neutral-950/60 p-2"
 	data-testid="event-scatter"
-	aria-label="Events over time"
+	aria-label={metric === 'duration' ? 'Request duration over time' : 'Events over time'}
 >
 	<div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[0.6875rem]">
 		<button
@@ -170,11 +174,30 @@
 			class="flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 font-semibold uppercase tracking-wider text-neutral-400 transition-colors hover:border-neutral-700 hover:text-neutral-200"
 		>
 			<span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
-			Events over time
+			{metric === 'duration' ? 'Request duration' : 'Events over time'}
 		</button>
+		<div
+			role="group"
+			aria-label="Chart metric"
+			class="flex rounded-md border border-neutral-800 p-0.5"
+		>
+			{#each ['count', 'duration'] as choice}
+				<button
+					type="button"
+					data-testid={`chart-metric-${choice}`}
+					aria-pressed={metric === choice}
+					onclick={() => onMetricChange?.(choice as SeriesMetric)}
+					class="rounded px-2 py-0.5 transition-colors {metric === choice
+						? 'bg-sky-950 text-sky-300'
+						: 'text-neutral-400 hover:text-neutral-200'}"
+				>
+					{choice === 'count' ? 'Count' : 'Duration (ms)'}
+				</button>
+			{/each}
+		</div>
 		<span class="text-neutral-400" data-testid="scatter-summary">
 			{formatCount(totalEvents)}
-			{unit} in {formatCount(bucketCount)} buckets
+			{unit}{#if metric === 'count'}{' '}in {formatCount(bucketCount)} buckets{/if}
 		</span>
 		{#if groups.length > 1}
 			<span class="text-neutral-500" data-testid="scatter-groups">
@@ -195,7 +218,7 @@
 			</span>
 		{/each}
 		{#if loading && expanded}
-			<span class="text-amber-300" data-testid="scatter-loading">counting…</span>
+			<span class="text-amber-300" data-testid="scatter-loading">loading…</span>
 		{/if}
 		{#if expanded}
 			{#if brushPreview !== null}
@@ -211,6 +234,12 @@
 	</div>
 
 	{#if expanded}
+		{#if metric === 'duration'}
+			<p class="px-1 text-[0.6875rem] text-neutral-500" data-testid="duration-note">
+				Observed duration (ms) · last event + its duration − first event · partial requests may
+				appear shorter
+			</p>
+		{/if}
 		{#if chartError}
 			<p class="px-1 py-4 text-xs text-amber-300" data-testid="scatter-error">
 				The chart could not be loaded. The log view is unaffected.
@@ -218,9 +247,10 @@
 		{:else if hasPoints}
 			{#if Chart !== null}
 				<!-- Remounted on reset, which is what clears a brush. -->
-				{#key chartKey}
+				{#key `${chartKey}:${metric}`}
 					<Chart
 						{points}
+						{metric}
 						{from}
 						{to}
 						{height}
@@ -240,7 +270,9 @@
 			{/if}
 		{:else if !loading}
 			<p class="px-1 py-6 text-xs text-neutral-500" data-testid="scatter-empty">
-				No events in this window yet.
+				{metric === 'duration'
+					? 'No requests with a request ID in this window yet.'
+					: 'No events in this window yet.'}
 			</p>
 		{/if}
 	{/if}
