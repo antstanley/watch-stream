@@ -111,7 +111,7 @@ Only if trusted publishing is unavailable. `mfa=publish` means this needs a 2FA 
 
 ```bash
 pnpm build
-npm publish --ignore-scripts --access public
+npm publish --ignore-scripts --access public --tag latest
 ```
 
 Never commit an npm token, and never add one to this repository's secrets.
@@ -133,3 +133,12 @@ If the `Version PR` workflow fails with _"GitHub Actions is not permitted to cre
 requests"_, the repository setting is off: **Settings → Actions → General → Workflow permissions →
 Allow GitHub Actions to create and approve pull requests**. The default workflow permission should
 stay read-only; only this workflow asks for more.
+
+After approval, verify the public dist-tag (staging alone does not update it):
+
+```bash
+npm view watch-tail dist-tags --json
+```
+
+For a stable release, `latest` should match the released version. The package defaults to
+`latest`; prerelease workflows pass their own tag explicitly.

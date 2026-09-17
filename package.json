@@ -1,6 +1,6 @@
 {
 	"name": "watch-tail",
-	"version": "0.6.1",
+	"version": "0.6.2",
 	"description": "Tail Amazon CloudWatch Logs in your browser: a local SvelteKit UI with live and historic streaming, ambient AWS credentials and floci support",
 	"keywords": [
 		"aws",
@@ -34,7 +34,8 @@
 	],
 	"type": "module",
 	"publishConfig": {
-		"access": "public"
+		"access": "public",
+		"tag": "latest"
 	},
 	"scripts": {
 		"dev": "vite dev",

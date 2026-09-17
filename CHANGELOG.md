@@ -1,5 +1,13 @@
 # watch-tail
 
+## 0.6.2
+
+### Patch Changes
+
+- Refresh the README with demo screenshots and concise guides to request grouping, multi-group
+  investigation, chart zooming, and offline archives. Clarify the app’s CloudWatch scan limit and
+  explicitly select the `latest` npm dist-tag for stable releases.
+
 ## 0.6.1
 
 ### Patch Changes
