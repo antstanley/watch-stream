@@ -224,7 +224,7 @@ instead of showing an error.
 
 ```json
 {
-	"path": "/home/you/.local/share/watch-tail/archive.duckdb",
+	"path": "/home/you/.local/share/watch-tail/123456789012/eu-west-1/archive.duckdb",
 	"available": true,
 	"error": null,
 	"bytes": 4096,
@@ -320,9 +320,22 @@ it stays well behind the polling loop; the fixed cost of binding 4000 parameters
 `INSERT OR IGNORE` is not meaningfully slower than a plain `INSERT`. The Appender API cannot be used
 here at all, because `seq` has a `nextval()` default that the appender refuses to fill.
 
-The archive is one DuckDB file with a single writer: the server process holds the lock, statements are
+Each account/region archive is a DuckDB file with a single writer: the server process holds the lock, statements are
 serialised through an internal queue, and a failure (a full disk, a locked file) is recorded and
 reported by `/api/archive` rather than interrupting a stream.
+
+Archive routing lives in `src/lib/server/archive-location.ts`. STS identifies the account before
+new CloudWatch streams write. The default layout is `<data-dir>/watch-tail/<account>/<region>/archive.duckdb`;
+custom endpoints add an `endpoints/<endpoint-hash>/` namespace. A map of opening promises keyed by
+absolute file path prevents duplicate writers inside a process. All archive routes select the
+requested region; `/api/archive?region=...` reports that file's status.
+
+Verified account/region mappings are cached under `identities/`, keyed by a hash of credential-source
+selectors and endpoint/region. They contain no credentials and are used only for offline reads.
+Writes re-check STS and never fall back to a cached account after an identity failure. Failed lookups
+are retried on subsequent requests. `WATCH_STREAM_ARCHIVE_DIR` overrides the root directory;
+`WATCH_STREAM_ARCHIVE_DB` / `--db` selects one explicit file instead, including legacy archives.
+Legacy files are not migrated because they do not contain account IDs.
 
 ## Several log groups, and the chart
 
@@ -490,12 +503,13 @@ SvelteKit exposes `.env` values through `$env/dynamic/private`, but the AWS SDK 
 once at startup (existing variables win, `node --env-file` semantics). `pnpm floci:up` writes
 that file with the floci endpoint and its throwaway credentials.
 
-| Variable                            | Purpose                                                            |
-| ----------------------------------- | ------------------------------------------------------------------ |
-| `AWS_REGION` / `AWS_DEFAULT_REGION` | Region before the ambient profile region; unset falls through      |
-| `AWS_ENDPOINT_URL_LOGS`             | CloudWatch Logs endpoint override (checked first)                  |
-| `AWS_ENDPOINT_URL`                  | Global endpoint override; set to `http://localhost:4566` for floci |
-| `WATCH_STREAM_REGIONS`              | Narrow the picker; unset offers every CloudWatch Logs region       |
-| `WATCH_STREAM_LIMIT`                | Default page size for `describe-log-groups`                        |
-| `WATCH_STREAM_ARCHIVE`              | `off` disables the local history archive                           |
-| `WATCH_STREAM_ARCHIVE_DB`           | Database file for local history (default: the platform data dir)   |
+| Variable                            | Purpose                                                                 |
+| ----------------------------------- | ----------------------------------------------------------------------- |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | Region before the ambient profile region; unset falls through           |
+| `AWS_ENDPOINT_URL_LOGS`             | CloudWatch Logs endpoint override (checked first)                       |
+| `AWS_ENDPOINT_URL`                  | Global endpoint override; set to `http://localhost:4566` for floci      |
+| `WATCH_STREAM_REGIONS`              | Narrow the picker; unset offers every CloudWatch Logs region            |
+| `WATCH_STREAM_LIMIT`                | Default page size for `describe-log-groups`                             |
+| `WATCH_STREAM_ARCHIVE`              | `off` disables the local history archive                                |
+| `WATCH_STREAM_ARCHIVE_DIR`          | Root directory for account/region archives (default: platform data dir) |
+| `WATCH_STREAM_ARCHIVE_DB`           | Explicit file override, bypassing account/region separation             |

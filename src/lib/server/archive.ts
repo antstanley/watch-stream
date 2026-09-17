@@ -14,7 +14,8 @@
  */
 import { mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { ArchiveLocator, type ArchiveSelection } from './archive-location';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { LogEventDto } from '$lib/types';
 import {
@@ -466,29 +467,40 @@ export class LogArchive {
 	}
 }
 
-/** The archive for the running server, opened once per process. */
-let sharedArchive: Promise<LogArchive> | null = null;
+/** A single opening promise per absolute file path prevents duplicate DuckDB writers. */
+const sharedArchives = new Map<string, Promise<LogArchive>>();
+let archiveLocator = new ArchiveLocator();
 
-/**
- * Returns the process-wide archive for `env`, opening it on first use.
- *
- * The same file is never opened twice per process; a disabled archive
- * (`WATCH_STREAM_ARCHIVE=off`) is remembered so no driver import is attempted.
- */
-export function getArchive(
+/** Opens the selected account/region archive; explicit --db paths remain file overrides. */
+export async function getArchive(
 	env: Record<string, string | undefined>,
+	selection: ArchiveSelection = {},
 	load?: DriverLoader,
 ): Promise<LogArchive> {
-	if (sharedArchive === null) {
-		const config = resolveArchiveConfig(env);
-		sharedArchive = config.enabled
-			? LogArchive.open({ path: config.path, ...(load === undefined ? {} : { load }) })
-			: Promise.resolve(LogArchive.unavailable(config.path));
+	const config = resolveArchiveConfig(env);
+	if (!config.enabled) return LogArchive.unavailable(config.path);
+	let path = config.path;
+	if (!env.WATCH_STREAM_ARCHIVE_DB?.trim()) {
+		try {
+			path = await archiveLocator.locate(config.path, env, selection);
+		} catch (error) {
+			return LogArchive.unavailable(
+				config.path,
+				`Cannot select account archive: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
-	return sharedArchive;
+	path = resolve(path);
+	let archive = sharedArchives.get(path);
+	if (!archive) {
+		archive = LogArchive.open({ path, ...(load === undefined ? {} : { load }) });
+		sharedArchives.set(path, archive);
+	}
+	return archive;
 }
 
-/** Forgets the process-wide archive; used by tests and by the CLI's shutdown. */
+/** Forgets cached handles and identity mappings; callers close archives before resetting. */
 export function resetArchive(): void {
-	sharedArchive = null;
+	sharedArchives.clear();
+	archiveLocator = new ArchiveLocator();
 }

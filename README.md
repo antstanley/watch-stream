@@ -70,13 +70,23 @@ watch-tail --no-archive        # disable archiving
 
 <img src="https://raw.githubusercontent.com/antstanley/watch-stream/v0.6.2/docs/archive.png" alt="Local archive replay with stored event counts and a severity chart" width="1200">
 
-The default file is `archive.duckdb` in:
+Each AWS account and region gets its own `<account-id>/<region>/archive.duckdb` beneath:
 
 | Platform | Directory                                      |
 | -------- | ---------------------------------------------- |
 | macOS    | `~/Library/Application Support/watch-tail/`    |
 | Linux    | `${XDG_DATA_HOME:-~/.local/share}/watch-tail/` |
 | Windows  | `%LOCALAPPDATA%\watch-tail\`                   |
+
+Account IDs come from AWS STS, so two profiles for the same account share its regional archive.
+Changing regions switches files automatically. Emulator endpoints have a separate namespace.
+Account mappings are cached locally for offline reads; a new CloudWatch stream verifies its account
+before archiving. If verification fails, logs still stream but are not archived.
+
+Existing `archive.duckdb` files stay untouched. Open a legacy archive with `--db /path/to/archive.duckdb`.
+`--db` deliberately overrides automatic account/region separation: use it to inspect an existing file
+or manage a file yourself. For offline access on another machine, copy the regional database and
+open it with `--db`.
 
 DuckDB is optional: if its native driver cannot load, the viewer runs without archiving. One process
 can own an archive file at a time; use separate `--db` paths for concurrent instances. To inspect it
@@ -107,7 +117,7 @@ watch-tail [options]
       --print            Print the environment that would be used, then exit
       --list             List the AWS profiles found on disk, then exit
       --verbose          Log the server's own output
-      --db <path>        Database file for local history (default: app data dir)
+      --db <path>        Explicit archive file (default: per account and region)
       --no-archive       Do not keep a local history archive
   -h, --help             Show this help
   -v, --version          Show the version

@@ -184,10 +184,12 @@
 	 * here only means the API is unreachable; the archive view stays hidden in that case.
 	 */
 	async function loadArchiveStatus(): Promise<void> {
+		const target = region;
 		try {
-			archiveStatus = await fetchArchiveStatus();
+			const status = await fetchArchiveStatus({ region: target });
+			if (region === target) archiveStatus = status;
 		} catch {
-			archiveStatus = null;
+			if (region === target) archiveStatus = null;
 		}
 	}
 
@@ -409,6 +411,7 @@
 		selectedGroups = [];
 		seriesPoints = [];
 		syncUrl(next, []);
+		void loadArchiveStatus();
 		void loadGroups(next);
 	}
 
