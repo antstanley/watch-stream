@@ -57,6 +57,12 @@ In **Historic**, drag across the chart to narrow the window. Click to clear the 
 **Reset zoom** to restore the preset. CloudWatch charts reflect the events loaded into the viewer;
 archive charts query the whole selected window.
 
+Switch the chart from **Count** to **Duration (ms)** to see one point per request: X is its first
+observed event timestamp; Y is `(last timestamp + last event duration) − first timestamp` in
+milliseconds. The last event's JSON `duration` (or `durationMs`) is used when present; otherwise it
+adds zero. Hover for the request ID and duration. Severity filters and chart zoom work in both modes.
+Only events with request IDs contribute; incomplete windows can show partial durations.
+
 ## Keep your history
 
 Choose **Local archive** to browse events already captured on this machine, even offline or with an

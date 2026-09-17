@@ -21,7 +21,7 @@
 		fetchSeries,
 	} from '$lib/groups-client';
 	import type { LogLevel } from '$lib/log-buffer';
-	import { bucketEvents, isMeaningfulBrush } from '$lib/series-buckets';
+	import { bucketEvents, requestDurations, isMeaningfulBrush } from '$lib/series-buckets';
 	import { LogStream } from '$lib/log-stream.svelte';
 	import type { StreamTarget } from '$lib/log-stream.svelte';
 	import type { LogMode } from '$lib/time-range';
@@ -32,6 +32,7 @@
 		LogEventDto,
 		LogGroupSummary,
 		SeriesPoint,
+		SeriesMetric,
 		StreamSource,
 	} from '$lib/types';
 
@@ -87,6 +88,8 @@
 	let seriesPoints = $state<SeriesPoint[]>([]);
 	/** True while the archive counts are being fetched. */
 	let seriesLoading = $state(false);
+	let chartMetric = $state<SeriesMetric>('count');
+	let seriesRequest = 0;
 	/** The chart's own reset handle, for clearing a brush. */
 	let scatter = $state<{ reset: () => void } | null>(null);
 	/** True only when the local archive reports that it can be read. */
@@ -476,6 +479,7 @@
 			windowTo ?? '',
 			levelFilter ?? '',
 			groupRequests ? 'request' : 'event',
+			chartMetric,
 			stream.receivedCount,
 			stream.ready?.startTime ?? '',
 			stream.ready?.endTime ?? '',
@@ -531,23 +535,29 @@
 	 * streamed are bucketed here. Both end up as the same points.
 	 */
 	async function loadSeries(): Promise<void> {
+		const request = ++seriesRequest;
+		seriesLoading = false;
 		if (selectedGroups.length === 0 || region === '') {
 			seriesPoints = [];
 			return;
 		}
 		const { from, to } = chartWindow();
 		if (source !== 'archive') {
-			seriesPoints = bucketEvents(stream.lines as LogEventDto[], {
-				from,
-				to,
-				bucketMs: chartBucketMs(from, to),
-				level: levelFilter,
-				fallbackGroup: selectedGroup ?? '',
-				byRequest: groupRequests,
-			});
+			seriesPoints = (chartMetric === 'duration' ? requestDurations : bucketEvents)(
+				stream.lines as LogEventDto[],
+				{
+					from,
+					to,
+					bucketMs: chartBucketMs(from, to),
+					level: levelFilter,
+					fallbackGroup: selectedGroup ?? '',
+					byRequest: groupRequests,
+				},
+			);
 			return;
 		}
 		seriesLoading = true;
+		seriesPoints = [];
 		try {
 			const series = await fetchSeries({
 				region,
@@ -556,13 +566,14 @@
 				to,
 				levels: levelFilter === null ? [] : [levelFilter],
 				by: groupRequests ? 'request' : 'event',
+				metric: chartMetric,
 			});
-			seriesPoints = series.points;
+			if (request === seriesRequest) seriesPoints = series.points;
 		} catch {
-			// The chart is a convenience: a failed count leaves the view alone.
-			seriesPoints = [];
+			// A newer metric/window response wins over this one.
+			if (request === seriesRequest) seriesPoints = [];
 		} finally {
-			seriesLoading = false;
+			if (request === seriesRequest) seriesLoading = false;
 		}
 	}
 
@@ -665,6 +676,8 @@
 			bucketMs={chartBucketMs(chartWindow().from, chartWindow().to)}
 			groups={selectedGroups}
 			byRequest={groupRequests}
+			metric={chartMetric}
+			onMetricChange={(metric) => (chartMetric = metric)}
 			loading={seriesLoading}
 			onBrush={applyBrush}
 		/>

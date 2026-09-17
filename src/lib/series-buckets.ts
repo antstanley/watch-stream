@@ -6,8 +6,9 @@
  * view are bucketed here instead. Both paths produce the same
  * {@link SeriesPoint} shape, so the chart has one data contract.
  */
+import { eventDurationMs } from './request-duration';
 import { effectiveLevel, type LogLevel } from './log-buffer';
-import { bucketRequests } from './request-groups';
+import { bucketRequests, collectRequests } from './request-groups';
 import type { LogEventDto, SeriesLevel, SeriesPoint } from './types';
 
 /** Severity order used wherever levels are listed. */
@@ -184,4 +185,49 @@ export function isMeaningfulBrush(
 	const floor = Math.max(MIN_BRUSH_MS, bucketMs * 2);
 	if (span < floor) return false;
 	return span <= windowSpan * MAX_BRUSH_FRACTION;
+}
+
+/** One point per identified request, using its observed first/last events in the window. */
+export function requestDurations(
+	events: readonly LogEventDto[],
+	options: BucketEventsOptions,
+): SeriesPoint[] {
+	const byGroup = new Map<string, LogEventDto[]>();
+	for (const event of events) {
+		if (
+			!Number.isFinite(event.timestamp) ||
+			event.timestamp < options.from ||
+			event.timestamp > options.to
+		)
+			continue;
+		const group = event.group ?? options.fallbackGroup ?? '';
+		const rows = byGroup.get(group) ?? [];
+		rows.push(event);
+		byGroup.set(group, rows);
+	}
+	const points: SeriesPoint[] = [];
+	for (const [group, rows] of byGroup) {
+		for (const request of collectRequests(rows)) {
+			if (options.level && request.level !== options.level) continue;
+			// Equal timestamps use the last arrival, matching the archive's seq tie-breaker.
+			const last = request.events.reduce(
+				(latest, entry) => (entry.event.timestamp >= latest.timestamp ? entry.event : latest),
+				request.events[0].event,
+			);
+			points.push({
+				t: request.first,
+				group,
+				level: request.level,
+				events: 1,
+				requestId: request.id,
+				durationMs: request.last - request.first + eventDurationMs(last.message),
+			});
+		}
+	}
+	return points.toSorted(
+		(a, b) =>
+			a.t - b.t ||
+			a.group.localeCompare(b.group) ||
+			(a.requestId ?? '').localeCompare(b.requestId ?? ''),
+	);
 }

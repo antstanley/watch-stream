@@ -173,6 +173,8 @@ export type IdentityResponse = {
 /** Level of a chart series; `unknown` counts events whose level was not detected. */
 export type SeriesLevel = LogLevel | 'unknown';
 
+export type SeriesMetric = 'count' | 'duration';
+
 /** One bucket of the chart: events of one level, in one group, in one time bucket. */
 export type SeriesPoint = {
 	/** Bucket start, epoch milliseconds. */
@@ -181,6 +183,9 @@ export type SeriesPoint = {
 	group: string;
 	level: SeriesLevel;
 	events: number;
+	/** Present for one-request duration points; events is then 1. */
+	durationMs?: number;
+	requestId?: string;
 };
 
 /** Events per group over the whole window. */

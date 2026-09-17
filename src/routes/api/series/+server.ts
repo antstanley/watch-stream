@@ -10,6 +10,7 @@ import {
 	GROUP_BY_PARAM_HINT,
 	SERIES_SOURCE_HINT,
 	parseBucketParam,
+	parseMetricParam,
 	parseGroupByParam,
 	readSeries,
 } from '$lib/server/series';
@@ -40,6 +41,10 @@ export const GET = async ({ url }: RequestEvent): Promise<Response> => {
 
 	const levels = parseLevelParam(url.searchParams.get('level'));
 	if (levels === undefined) return apiError(400, LEVEL_PARAM_HINT, 'invalid-level');
+
+	const metric = parseMetricParam(url.searchParams.get('metric'));
+	if (metric === null)
+		return apiError(400, 'Invalid metric: expected count or duration', 'invalid-metric');
 
 	const by = parseGroupByParam(url.searchParams.get('by'));
 	if (by === undefined) return apiError(400, GROUP_BY_PARAM_HINT, 'invalid-group-by');
@@ -77,6 +82,7 @@ export const GET = async ({ url }: RequestEvent): Promise<Response> => {
 		to: endTime,
 		levels,
 		by,
+		metric,
 		bucketMs: parseBucketParam(url.searchParams.get('bucket')),
 	});
 	// An unavailable archive answers an empty series: the chart says "nothing

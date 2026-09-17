@@ -201,6 +201,30 @@ async function main(): Promise<number> {
 			check(checks, 'grouping can be turned off', grouped === 'false', String(grouped));
 		}
 
+		// Both chart metrics must remain available independently of log-row grouping.
+		await page.getByTestId('chart-metric-duration').click();
+		check(
+			checks,
+			'duration chart can be selected',
+			(await page.getByTestId('chart-metric-duration').getAttribute('aria-pressed')) === 'true',
+		);
+		if (requests > 0) {
+			await page.waitForFunction(() =>
+				document.querySelector('[data-testid="scatter-chart"]')?.textContent?.includes(' ms'),
+			);
+			check(
+				checks,
+				'duration axis uses milliseconds',
+				(await page.getByTestId('scatter-chart').textContent())?.includes(' ms') === true,
+			);
+		}
+		await page.getByTestId('chart-metric-count').click();
+		check(
+			checks,
+			'count chart can be restored',
+			(await page.getByTestId('chart-metric-count').getAttribute('aria-pressed')) === 'true',
+		);
+
 		/**
 		 * Hover a chart mark and read the tooltip's computed colours.
 		 *

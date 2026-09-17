@@ -513,3 +513,17 @@ that file with the floci endpoint and its throwaway credentials.
 | `WATCH_STREAM_ARCHIVE`              | `off` disables the local history archive                                |
 | `WATCH_STREAM_ARCHIVE_DIR`          | Root directory for account/region archives (default: platform data dir) |
 | `WATCH_STREAM_ARCHIVE_DB`           | Explicit file override, bypassing account/region separation             |
+
+## Request duration chart
+
+The chart defaults to bucketed counts. `metric=duration` on `/api/series` returns one point per
+request ID and log group, with `t` at the earliest event and `durationMs` equal to latest timestamp
+minus earliest timestamp plus the latest event's declared duration. `events` is 1 for these points,
+so legends count requests, not milliseconds. This mode always groups by request regardless of `by`.
+
+`request-duration.ts` parses finite, non-negative JSON `duration` / `durationMs` values in milliseconds,
+including numeric strings and prefixed JSON payloads. Missing or invalid durations add zero. Client
+and archive paths share this parser. DuckDB selects the final message by timestamp then archive
+sequence; the client uses timestamp then arrival order. Earlier events' durations are not added.
+Requests without an ID are omitted. Only observed events in the selected window contribute, so
+partial windows/buffers can understate the full duration. Count mode retains its existing behavior.

@@ -11,12 +11,13 @@
 	 */
 	import { ScatterChart, Tooltip, type BrushState, type ChartState } from 'layerchart';
 	import { SERIES_LEVEL_COLOR } from '$lib/series-buckets';
-	import type { SeriesPoint } from '$lib/types';
+	import type { SeriesPoint, SeriesMetric } from '$lib/types';
 
 	/** A brushed time range, in epoch milliseconds. */
 	export type BrushRange = { from: number; to: number };
 
 	type Props = {
+		metric?: SeriesMetric;
 		/** Bucketed counts for the window; one row per bucket, group and level. */
 		points?: SeriesPoint[];
 		/** Inclusive start of the window, epoch ms. */
@@ -31,7 +32,15 @@
 		onBrushPreview?: (range: BrushRange | null) => void;
 	};
 
-	let { points = [], from = 0, to = 0, height = 200, onBrush, onBrushPreview }: Props = $props();
+	let {
+		metric = 'count',
+		points = [],
+		from = 0,
+		to = 0,
+		height = 200,
+		onBrush,
+		onBrushPreview,
+	}: Props = $props();
 
 	/**
 	 * layerchart's series shape: a key, a label, a colour and the rows of that
@@ -52,6 +61,11 @@
 			data: rows,
 		}));
 	});
+
+	/** Keep the slowest request clear of the chart edge, including all-zero spans. */
+	let durationCeiling = $derived(
+		Math.max(1, points.reduce((max, point) => Math.max(max, point.durationMs ?? 0), 0) * 1.1),
+	);
 
 	/** layerchart's chart context, which owns the brush state. */
 	let chartContext = $state<ChartState | undefined>(undefined);
@@ -102,17 +116,23 @@
 		bind:context={chartContext}
 		data={points}
 		x={(point: SeriesPoint) => new Date(point.t)}
-		y="events"
+		y={metric === 'duration' ? 'durationMs' : 'events'}
+		yDomain={metric === 'duration' ? [0, durationCeiling] : undefined}
 		{series}
 		xDomain={[new Date(from), new Date(to)]}
-		padding={{ top: 8, right: 12, bottom: 24, left: 40 }}
+		padding={{ top: 8, right: 12, bottom: 24, left: metric === 'duration' ? 72 : 40 }}
 		grid={{ x: true, y: true }}
 		props={{
 			points: { r: 3, stroke: '#0a0a0a', strokeWidth: 1, fillOpacity: 0.9 },
 			// Per-axis config lives under `props`: an `axis={{ x, y }}` object is
 			// silently ignored by layerchart 2.5.
 			xAxis: { format: clockLabel, tickSpacing: 90, tickOcclusion: true },
-			yAxis: { format: 'integer', tickSpacing: 24, ticks: 4 },
+			yAxis: {
+				format:
+					metric === 'duration' ? (value: number) => `${value.toLocaleString()} ms` : 'integer',
+				tickSpacing: 24,
+				ticks: 4,
+			},
 		}}
 		brush={{
 			axis: 'x',
@@ -147,7 +167,17 @@
 					<Tooltip.List>
 						<Tooltip.Item label="time" value={data.t} format={clockLabel} />
 						<Tooltip.Item label="group" value={data.group} />
-						<Tooltip.Item label="events" value={data.events} format="integer" />
+						{#if metric === 'duration'}
+							<Tooltip.Item label="request" value={data.requestId ?? ''} />
+							<Tooltip.Item
+								label="duration (ms)"
+								value={data.durationMs ?? 0}
+								format={(value: number) =>
+									value.toLocaleString(undefined, { maximumFractionDigits: 3 })}
+							/>
+						{:else}
+							<Tooltip.Item label="events" value={data.events} format="integer" />
+						{/if}
 					</Tooltip.List>
 				{/snippet}
 			</Tooltip.Root>
