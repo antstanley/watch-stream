@@ -1,4 +1,6 @@
-import { json } from '@sveltejs/kit';
+import { json, type RequestEvent } from '@sveltejs/kit';
+import { apiError } from '$lib/server/api';
+import { parseRegionParam, REGION_PARAM_HINT } from '$lib/server/aws';
 import { getArchive } from '$lib/server/archive';
 import { readEnv } from '$lib/server/env';
 import type { ArchiveStatusResponse } from '$lib/types';
@@ -10,8 +12,10 @@ import type { ArchiveStatusResponse } from '$lib/types';
  * driver or unreadable answers 200 with `available: false` and the reason, so
  * the UI can hide the archive view instead of showing an error.
  */
-export const GET = async (): Promise<Response> => {
-	const archive = await getArchive(readEnv());
+export const GET = async ({ url }: Pick<RequestEvent, 'url'>): Promise<Response> => {
+	const parsed = parseRegionParam(url.searchParams.get('region'));
+	if (!parsed.ok) return apiError(400, REGION_PARAM_HINT, 'invalid-region');
+	const archive = await getArchive(readEnv(), { region: parsed.region, readOnly: true });
 	const status = await archive.status();
 	const body: ArchiveStatusResponse = {
 		path: status.path,

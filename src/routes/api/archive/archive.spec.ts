@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type * as ArchiveServer from '$lib/server/archive';
 import { GET } from './+server';
+import { getArchive } from '$lib/server/archive';
 
 type Status = {
 	path: string;
@@ -47,17 +48,29 @@ vi.mock('$lib/server/archive', async (importOriginal) => {
 	const actual = await importOriginal<typeof ArchiveServer>();
 	return {
 		...actual,
-		getArchive: async () => ({ status: async () => state.status }),
+		getArchive: vi.fn<() => Promise<{ status: () => Promise<Status> }>>(async () => ({
+			status: async () => state.status,
+		})),
 	};
 });
 
 describe('GET /api/archive', () => {
+	test('routes status to the selected region and rejects malformed region paths', async () => {
+		await GET({ url: new URL('http://localhost/api/archive?region=af-south-1') });
+		expect(getArchive).toHaveBeenLastCalledWith(expect.anything(), {
+			region: 'af-south-1',
+			readOnly: true,
+		});
+		const bad = await GET({ url: new URL('http://localhost/api/archive?region=../escape') });
+		expect(bad.status).toBe(400);
+	});
+
 	beforeEach(() => {
 		state.status = okStatus;
 	});
 
 	test('reports the file, its size and the totals flat', async () => {
-		const response = await GET();
+		const response = await GET({ url: new URL('http://localhost/api/archive') });
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
 			path: '/tmp/archive.duckdb',
@@ -80,7 +93,7 @@ describe('GET /api/archive', () => {
 			bytes: null,
 			totals: { rows: 0, groups: 0, regions: 0, oldest: null, newest: null },
 		};
-		const response = await GET();
+		const response = await GET({ url: new URL('http://localhost/api/archive') });
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
 			available: false,

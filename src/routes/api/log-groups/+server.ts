@@ -57,7 +57,7 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 	const config = resolveAwsConfig(env, parsedRegion.region);
 
 	if (source === 'archive') {
-		const archive = await getArchive(env);
+		const archive = await getArchive(env, { region: config.region, readOnly: true });
 		const groups = listArchivedGroups(await archive.groups(config.region), { prefix, limit });
 		const body: LogGroupsResponse = {
 			region: config.region ?? '',

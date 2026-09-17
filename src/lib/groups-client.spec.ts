@@ -186,6 +186,12 @@ describe('fetchArchiveStatus', () => {
 		newest: 2000,
 	};
 
+	it('selects the requested region for archive status', async () => {
+		const fetchImpl = stubFetch({ available: true });
+		await fetchArchiveStatus({ region: 'af-south-1', fetchImpl });
+		expect(fetchImpl).toHaveBeenCalledWith('/api/archive?region=af-south-1', expect.anything());
+	});
+
 	it('requests /api/archive and returns the totals', async () => {
 		const fetchImpl = stubFetch(available);
 		const response = await fetchArchiveStatus({ fetchImpl });

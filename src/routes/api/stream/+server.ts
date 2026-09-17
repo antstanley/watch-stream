@@ -169,7 +169,7 @@ async function resolveFeed(request: FeedRequest): Promise<Feed | Response> {
 				'missing-region-param',
 			);
 		}
-		const archive: LogArchive = await getArchive(env);
+		const archive: LogArchive = await getArchive(env, { region, readOnly: true });
 		return {
 			region,
 			groupNames,
@@ -312,7 +312,7 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 	if (feed instanceof Response) return feed;
 
 	// Only the CloudWatch feed writes: reading the archive must not touch it.
-	const archive = source === 'cloudwatch' ? await getArchive(env) : null;
+	const archive = source === 'cloudwatch' ? await getArchive(env, { region: feed.region }) : null;
 
 	const encoder = new TextEncoder();
 	let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;

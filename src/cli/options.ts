@@ -217,7 +217,7 @@ Options
       --print            Print the environment that would be used, then exit
       --list             List the AWS profiles found on disk, then exit
       --verbose          Log the server's own output
-      --db <path>        Database file for local history (default: app data dir)
+      --db <path>        Explicit archive file (default: per account and region)
       --no-archive       Do not keep a local history archive
   -h, --help             Show this help
   -v, --version          Show the version

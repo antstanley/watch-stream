@@ -33,6 +33,7 @@ vi.mock('$lib/server/aws', async (importOriginal) => {
 
 /** Archive double: the route must never touch a real DuckDB file from a test. */
 const archiveState = {
+	selections: [] as unknown[],
 	available: true,
 	error: null as string | null,
 	pages: [] as { events: unknown[]; last: { timestamp: number; seq: number } | null }[],
@@ -42,6 +43,7 @@ const archiveState = {
 
 function resetArchive(): void {
 	archiveState.available = true;
+	archiveState.selections = [];
 	archiveState.error = null;
 	archiveState.pages = [];
 	archiveState.requests = [];
@@ -49,19 +51,22 @@ function resetArchive(): void {
 }
 
 vi.mock('$lib/server/archive', () => ({
-	getArchive: async () => ({
-		path: '/tmp/watch-tail-test/archive.duckdb',
-		available: archiveState.available,
-		error: archiveState.error,
-		async page(request: Record<string, unknown>) {
-			archiveState.requests.push(request);
-			return archiveState.pages.shift() ?? { events: [], last: null };
-		},
-		async record(region: string, group: string, events: unknown[]) {
-			archiveState.records.push({ region, group, events });
-			return events.length;
-		},
-	}),
+	getArchive: async (_env: unknown, selection: unknown) => {
+		archiveState.selections.push(selection);
+		return {
+			path: '/tmp/watch-tail-test/archive.duckdb',
+			available: archiveState.available,
+			error: archiveState.error,
+			async page(request: Record<string, unknown>) {
+				archiveState.requests.push(request);
+				return archiveState.pages.shift() ?? { events: [], last: null };
+			},
+			async record(region: string, group: string, events: unknown[]) {
+				archiveState.records.push({ region, group, events });
+				return events.length;
+			},
+		};
+	},
 }));
 
 type Frame = { event: string; data: unknown };
@@ -805,6 +810,7 @@ describe('GET /api/stream source=archive', () => {
 		const reader = startReading(response);
 		await withTimeout(reader.done, 2000, 'archive stream end');
 		expect(archiveState.requests[0]).toMatchObject({ levels: ['error', 'warn'] });
+		expect(archiveState.selections).toEqual([{ region: 'af-south-1', readOnly: true }]);
 	});
 
 	test('rejects an unknown level, and rejects level on CloudWatch', async () => {
@@ -952,6 +958,7 @@ describe('GET /api/stream source=archive', () => {
 		await withTimeout(reader.done, 2000, 'stream end');
 
 		expect(archiveState.records).toHaveLength(1);
+		expect(archiveState.selections).toEqual([{ region: 'af-south-1' }]);
 		expect(archiveState.records[0]?.region).toBe('af-south-1');
 		expect(archiveState.records[0]?.group).toBe('/aws/lambda/demo');
 		expect(archiveState.records[0]?.events).toHaveLength(2);

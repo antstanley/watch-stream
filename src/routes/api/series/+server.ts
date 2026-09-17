@@ -68,7 +68,7 @@ export const GET = async ({ url }: RequestEvent): Promise<Response> => {
 	if (!window.ok) return apiError(400, window.message, window.code);
 	const endTime = window.endTime ?? Date.now();
 
-	const archive = await getArchive(env);
+	const archive = await getArchive(env, { region: config.region, readOnly: true });
 	const series = await readSeries({
 		archive,
 		region,

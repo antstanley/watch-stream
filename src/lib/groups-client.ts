@@ -225,8 +225,11 @@ export function fetchLogGroups(query: LogGroupsQuery): Promise<LogGroupsResponse
  * request means the API itself is unreachable and the caller should just hide
  * the archive view.
  */
-export function fetchArchiveStatus(options: RequestOptions = {}): Promise<ArchiveStatusResponse> {
-	return getJson<ArchiveStatusResponse>('/api/archive', options);
+export function fetchArchiveStatus(
+	options: RequestOptions & { region?: string } = {},
+): Promise<ArchiveStatusResponse> {
+	const query = options.region ? `?${new URLSearchParams({ region: options.region })}` : '';
+	return getJson<ArchiveStatusResponse>(`/api/archive${query}`, options);
 }
 
 /** Maximum number of log group rows the list renders; the rest is summarised as "showing first". */

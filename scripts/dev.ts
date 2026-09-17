@@ -221,7 +221,7 @@ function warnMissingProfile(profile: string): void {
 type RunOptions = { start: boolean; port: number | null };
 
 /** Development archive file, inside the repository and git-ignored. */
-const DEV_ARCHIVE_FILE = join(rootDir, '.watch-tail', 'archive.duckdb');
+const DEV_ARCHIVE_DIR = join(rootDir, '.watch-tail');
 
 /**
  * Starts the child with inherited stdio, forwards SIGINT/SIGTERM to it and
@@ -314,7 +314,7 @@ async function main(): Promise<void> {
 	// Keep the history archive inside the repository during development, so
 	// `pnpm dev` and `pnpm dev:aws` never write to the data directory of whoever
 	// runs them. An explicit value in the environment still wins.
-	env.WATCH_STREAM_ARCHIVE_DB ??= DEV_ARCHIVE_FILE;
+	env.WATCH_STREAM_ARCHIVE_DIR ??= DEV_ARCHIVE_DIR;
 
 	if (list) {
 		const names = readProfiles();
