@@ -1,5 +1,5 @@
 /**
- * Formatting helpers for the watch-stream UI. Every function here is pure so it can be unit
+ * Formatting helpers for the watch-tail UI. Every function here is pure so it can be unit
  * tested without a DOM.
  */
 

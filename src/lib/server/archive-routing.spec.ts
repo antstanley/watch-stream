@@ -25,7 +25,7 @@ test.skipIf(!installed)(
 				),
 			);
 		resetArchive();
-		const env = { WATCH_STREAM_ARCHIVE: 'on', AWS_PROFILE: 'account-a' };
+		const env = { WATCH_TAIL_ARCHIVE: 'on', AWS_PROFILE: 'account-a' };
 		const handles = [];
 		try {
 			const [first, same, otherRegion, otherAccount] = await Promise.all([
@@ -53,12 +53,12 @@ test.skipIf(!installed)(
 				expect(page.events.map((event) => event.message)).toEqual([`archive-${index}`]);
 			}
 			const explicit = await getArchive(
-				{ ...env, WATCH_STREAM_ARCHIVE_DB: first.path },
+				{ ...env, WATCH_TAIL_ARCHIVE_DB: first.path },
 				{ region: 'us-east-1' },
 			);
 			expect(explicit).toBe(first);
 			const calls = locate.mock.calls.length;
-			const disabled = await getArchive({ WATCH_STREAM_ARCHIVE: 'off' });
+			const disabled = await getArchive({ WATCH_TAIL_ARCHIVE: 'off' });
 			expect(disabled.available).toBe(false);
 			expect(locate).toHaveBeenCalledTimes(calls);
 		} finally {

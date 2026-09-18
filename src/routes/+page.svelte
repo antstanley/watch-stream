@@ -207,7 +207,7 @@
 			health = healthResponse;
 			endpoint = healthResponse.endpoint;
 		} catch (error) {
-			bootError = `Could not reach the watch-stream API. ${failureText(error)}`;
+			bootError = `Could not reach the watch-tail API. ${failureText(error)}`;
 			if (region === '') region = DEFAULT_REGIONS[0];
 		}
 	}

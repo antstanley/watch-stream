@@ -79,7 +79,7 @@ describe.runIf(enabled)('watch-tail CLI', () => {
 		expect(health.region.length).toBeGreaterThan(0);
 
 		const page = await (await fetch(baseUrl)).text();
-		expect(page).toContain('watch-stream');
+		expect(page).toContain('watch-tail');
 		expect(running.output()).toContain(`http://127.0.0.1:${port}`);
 	}, 60_000);
 

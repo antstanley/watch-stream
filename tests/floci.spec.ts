@@ -2,7 +2,7 @@
  * End-to-end checks against a running floci (or LocalStack) emulator.
  *
  * Enable with:
- *   WATCH_STREAM_E2E=1 pnpm test:e2e
+ *   WATCH_TAIL_E2E=1 pnpm test:e2e
  *
  * The emulator must be reachable at AWS_ENDPOINT_URL (default http://localhost:4566).
  * These tests write only to a uniquely named, throwaway log group.
@@ -30,11 +30,11 @@ import { GET as streamGET } from '../src/routes/api/stream/+server.ts';
 const localEnvFile = join(dirname(dirname(fileURLToPath(import.meta.url))), '.env.local');
 if (existsSync(localEnvFile)) process.loadEnvFile(localEnvFile);
 
-const enabled = process.env.WATCH_STREAM_E2E === '1';
+const enabled = process.env.WATCH_TAIL_E2E === '1';
 const endpoint = process.env.AWS_ENDPOINT_URL ?? 'http://localhost:4566';
 const region = process.env.AWS_DEFAULT_REGION ?? process.env.AWS_REGION ?? 'us-east-1';
 
-const groupName = `/watch-stream/e2e-${Date.now()}`;
+const groupName = `/watch-tail/e2e-${Date.now()}`;
 const streamName = 'e2e-stream';
 
 const client = new CloudWatchLogsClient({
@@ -98,7 +98,7 @@ describe.runIf(enabled)('floci integration', () => {
 		);
 		await put(['boot ok']);
 
-		const groups = await listLogGroups(client, { prefix: '/watch-stream/' });
+		const groups = await listLogGroups(client, { prefix: '/watch-tail/' });
 		expect(groups.map((group) => group.name)).toContain(groupName);
 	}, 30_000);
 
@@ -172,7 +172,7 @@ describe.runIf(enabled)('floci integration', () => {
 		// Explicit opt-in: the archive is off inside a test process by default.
 		const dir = mkdtempSync(join(tmpdir(), 'watch-tail-e2e-archive-'));
 		const dbPath = join(dir, 'archive.duckdb');
-		process.env.WATCH_STREAM_ARCHIVE_DB = dbPath;
+		process.env.WATCH_TAIL_ARCHIVE_DB = dbPath;
 		resetArchive();
 		try {
 			const archive = await getArchive(process.env);
@@ -304,7 +304,7 @@ describe.runIf(enabled)('floci integration', () => {
 			await archive.close();
 			expect(existsSync(dbPath)).toBe(true);
 		} finally {
-			delete process.env.WATCH_STREAM_ARCHIVE_DB;
+			delete process.env.WATCH_TAIL_ARCHIVE_DB;
 			resetArchive();
 			rmSync(dir, { recursive: true, force: true });
 		}

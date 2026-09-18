@@ -2,7 +2,7 @@ import { REGION_CODES } from '$lib/regions';
 import { FALLBACK_REGION, resolveAwsConfig } from './aws';
 
 /**
- * Region list used when `WATCH_STREAM_REGIONS` is unset.
+ * Region list used when `WATCH_TAIL_REGIONS` is unset.
  *
  * Every AWS region that publishes CloudWatch Logs endpoints, including
  * `af-south-1`; see `$lib/regions`.
@@ -33,7 +33,7 @@ function normalize(value: string | null | undefined): string | null {
  * `defaultRegion` is the explicit environment region when set, otherwise
  * `effectiveRegion` (usually the region the SDK resolved from the ambient AWS
  * configuration), otherwise `us-east-1`. The list comes from
- * `WATCH_STREAM_REGIONS` when set, otherwise from {@link FALLBACK_REGIONS}, and
+ * `WATCH_TAIL_REGIONS` when set, otherwise from {@link FALLBACK_REGIONS}, and
  * the default region is always present: it is prepended when missing, keeping
  * the remaining order de-duplicated.
  */
@@ -43,7 +43,7 @@ export function resolveRegions(
 ): { regions: string[]; defaultRegion: string } {
 	const { region: envRegion } = resolveAwsConfig(env);
 	const defaultRegion = envRegion ?? normalize(effectiveRegion) ?? FALLBACK_REGION;
-	const configured = parseRegionList(env.WATCH_STREAM_REGIONS);
+	const configured = parseRegionList(env.WATCH_TAIL_REGIONS);
 	const regions = configured.length > 0 ? configured : [...FALLBACK_REGIONS];
 	if (!regions.includes(defaultRegion)) regions.unshift(defaultRegion);
 	return { regions, defaultRegion };

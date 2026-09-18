@@ -7,7 +7,7 @@
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
-	<title>watch-stream</title>
+	<title>watch-tail</title>
 </svelte:head>
 
 <!-- The shell owns the viewport: no centred max-width, no page scrolling. Panes fill the rest. -->
@@ -17,7 +17,7 @@
 	<header class="flex-none border-b border-neutral-900 bg-neutral-950/90">
 		<div class="flex w-full items-baseline gap-3 px-3 py-2 sm:px-4">
 			<span class="text-sm font-semibold tracking-tight">
-				watch<span class="text-sky-400">-stream</span>
+				watch<span class="text-sky-400">-tail</span>
 			</span>
 			<span class="hidden text-xs text-neutral-500 sm:inline">
 				Tail CloudWatch Logs in the browser

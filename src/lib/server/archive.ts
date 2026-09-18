@@ -100,7 +100,7 @@ export async function loadDuckDbDriver(): Promise<Driver> {
 
 /** Archive settings resolved from the environment. */
 export type ArchiveConfig = {
-	/** False when `WATCH_STREAM_ARCHIVE` turns the archive off. */
+	/** False when `WATCH_TAIL_ARCHIVE` turns the archive off. */
 	enabled: boolean;
 	/** Database file the archive would use. */
 	path: string;
@@ -118,8 +118,8 @@ function isDisabled(value: string | undefined): boolean {
  *
  * Vitest sets `VITEST`, and `NODE_ENV=test` covers other harnesses. Tests must
  * not append to the archive of the machine they run on, so the archive is off
- * unless a test asks for it through `WATCH_STREAM_ARCHIVE_DB` or
- * `WATCH_STREAM_ARCHIVE=on`.
+ * unless a test asks for it through `WATCH_TAIL_ARCHIVE_DB` or
+ * `WATCH_TAIL_ARCHIVE=on`.
  */
 function isTestProcess(env: Record<string, string | undefined>): boolean {
 	return env.VITEST !== undefined || env.NODE_ENV === 'test';
@@ -128,7 +128,7 @@ function isTestProcess(env: Record<string, string | undefined>): boolean {
 /**
  * Resolves the archive file path.
  *
- * `WATCH_STREAM_ARCHIVE_DB` wins; otherwise the file lives in the platform's
+ * `WATCH_TAIL_ARCHIVE_DB` wins; otherwise the file lives in the platform's
  * data directory (`XDG_DATA_HOME`, `%LOCALAPPDATA%` or
  * `~/Library/Application Support`), never in the current directory, so history
  * survives running the CLI from a different folder.
@@ -138,7 +138,7 @@ export function resolveArchiveConfig(
 	platform: NodeJS.Platform = process.platform,
 	home: string = homedir(),
 ): ArchiveConfig {
-	const path = env.WATCH_STREAM_ARCHIVE_DB?.trim() ?? '';
+	const path = env.WATCH_TAIL_ARCHIVE_DB?.trim() ?? '';
 	const dataDir =
 		env.XDG_DATA_HOME?.trim() ??
 		(platform === 'darwin'
@@ -146,7 +146,7 @@ export function resolveArchiveConfig(
 			: platform === 'win32'
 				? (env.LOCALAPPDATA?.trim() ?? join(home, 'AppData', 'Local'))
 				: join(home, '.local', 'share'));
-	const requested = env.WATCH_STREAM_ARCHIVE?.trim() ?? '';
+	const requested = env.WATCH_TAIL_ARCHIVE?.trim() ?? '';
 	const enabled = isDisabled(requested)
 		? false
 		: path.length > 0 || requested.length > 0
@@ -480,7 +480,7 @@ export async function getArchive(
 	const config = resolveArchiveConfig(env);
 	if (!config.enabled) return LogArchive.unavailable(config.path);
 	let path = config.path;
-	if (!env.WATCH_STREAM_ARCHIVE_DB?.trim()) {
+	if (!env.WATCH_TAIL_ARCHIVE_DB?.trim()) {
 		try {
 			path = await archiveLocator.locate(config.path, env, selection);
 		} catch (error) {

@@ -7,12 +7,12 @@
 
 /** `localStorage` keys, prefixed so they are easy to spot in a browser. */
 export const STORAGE_KEYS = {
-	sidebarWidth: 'watch-stream:sidebar-width',
-	prefixWidth: 'watch-stream:prefix-width',
-	wrap: 'watch-stream:wrap',
-	jsonView: 'watch-stream:json-view',
-	chartOpen: 'watch-stream:chart-open',
-	groupRequests: 'watch-stream:group-requests',
+	sidebarWidth: 'watch-tail:sidebar-width',
+	prefixWidth: 'watch-tail:prefix-width',
+	wrap: 'watch-tail:wrap',
+	jsonView: 'watch-tail:json-view',
+	chartOpen: 'watch-tail:chart-open',
+	groupRequests: 'watch-tail:group-requests',
 } as const;
 
 /** Default width of the group-list pane, in rem (matches the original layout). */

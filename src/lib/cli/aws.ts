@@ -291,8 +291,8 @@ export function buildChildEnv({
 	if (archive !== null) {
 		// A blank value means "unset" to the server, so `--db` and `--no-archive`
 		// can each be expressed without removing the variable.
-		env.WATCH_STREAM_ARCHIVE = archive.enabled ? '' : 'off';
-		env.WATCH_STREAM_ARCHIVE_DB = archive.path ?? '';
+		env.WATCH_TAIL_ARCHIVE = archive.enabled ? '' : 'off';
+		env.WATCH_TAIL_ARCHIVE_DB = archive.path ?? '';
 	}
 
 	return env;
@@ -376,9 +376,9 @@ export function isEmulatorEndpoint(endpoint: string): boolean {
 export function describeChildEnv(env: NodeJS.ProcessEnv): string[] {
 	return (
 		Object.keys(env)
-			// `WATCH_STREAM_*` is part of the effective configuration too: a
+			// `WATCH_TAIL_*` is part of the effective configuration too: a
 			// `--no-archive` or `--db` run is only reproducible if `--print` shows it.
-			.filter((key) => key.startsWith('AWS_') || key.startsWith('WATCH_STREAM_'))
+			.filter((key) => key.startsWith('AWS_') || key.startsWith('WATCH_TAIL_'))
 			.toSorted(compareNames)
 			.map((key) => `${key}=${env[key] ?? ''}`)
 	);

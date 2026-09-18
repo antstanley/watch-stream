@@ -7,8 +7,8 @@ const nodeEnv = (globalThis as unknown as { process: { env: Record<string, strin
 
 describe('readEnv', () => {
 	test('exposes process.env values', () => {
-		nodeEnv.WATCH_STREAM_ENV_PROBE = 'probe-value';
-		expect(readEnv().WATCH_STREAM_ENV_PROBE).toBe('probe-value');
+		nodeEnv.WATCH_TAIL_ENV_PROBE = 'probe-value';
+		expect(readEnv().WATCH_TAIL_ENV_PROBE).toBe('probe-value');
 	});
 
 	test('returns a plain record of the ambient environment', () => {

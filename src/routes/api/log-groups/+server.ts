@@ -44,8 +44,8 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 		}
 		limit = parsed;
 	} else {
-		// `WATCH_STREAM_LIMIT` is a default only: a bad value is ignored, not a 400.
-		const configured = Number((env.WATCH_STREAM_LIMIT ?? '').trim());
+		// `WATCH_TAIL_LIMIT` is a default only: a bad value is ignored, not a 400.
+		const configured = Number((env.WATCH_TAIL_LIMIT ?? '').trim());
 		if (Number.isInteger(configured) && configured >= 1 && configured <= MAX_LIMIT) {
 			limit = configured;
 		}
