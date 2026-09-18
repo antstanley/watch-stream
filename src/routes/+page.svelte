@@ -3,6 +3,7 @@
 	import { replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import EndpointBadge from '$lib/components/EndpointBadge.svelte';
+	import type { ChartSelection } from '$lib/chart-selection';
 	import EventScatterPanel from '$lib/components/EventScatterPanel.svelte';
 	import ColumnResizer from '$lib/components/ColumnResizer.svelte';
 	import RangeControls from '$lib/components/RangeControls.svelte';
@@ -85,6 +86,8 @@
 	 */
 	let groupRequests = $state(true);
 	/** Bucketed counts behind the chart. */
+	let chartSelection = $state<ChartSelection | null>(null);
+	let seriesBucketMs = $state(60_000);
 	let seriesPoints = $state<SeriesPoint[]>([]);
 	/** True while the archive counts are being fetched. */
 	let seriesLoading = $state(false);
@@ -275,6 +278,7 @@
 
 	/** Starts the stream for the current selection, or stops it when nothing is selected. */
 	function restartStream(): void {
+		chartSelection = null;
 		if (region === '' || selectedGroups.length === 0) {
 			stream.stop();
 			return;
@@ -509,6 +513,21 @@
 		return single.length > 0 ? [single] : [];
 	}
 
+	// A selection belongs to the current source/window and chart grouping.
+	$effect(() => {
+		void [
+			source,
+			region,
+			selectedGroups.join('\0'),
+			mode,
+			range,
+			windowFrom,
+			windowTo,
+			groupRequests,
+		];
+		chartSelection = null;
+	});
+
 	/** Bucket width for the chart of one window, mirroring the server's choice. */
 	function chartBucketMs(from: number, to: number): number {
 		const span = Math.max(1, to - from);
@@ -542,6 +561,7 @@
 			return;
 		}
 		const { from, to } = chartWindow();
+		seriesBucketMs = chartBucketMs(from, to);
 		if (source !== 'archive') {
 			seriesPoints = (chartMetric === 'duration' ? requestDurations : bucketEvents)(
 				stream.lines as LogEventDto[],
@@ -568,7 +588,10 @@
 				by: groupRequests ? 'request' : 'event',
 				metric: chartMetric,
 			});
-			if (request === seriesRequest) seriesPoints = series.points;
+			if (request === seriesRequest) {
+				seriesPoints = series.points;
+				seriesBucketMs = series.bucketMs;
+			}
 		} catch {
 			// A newer metric/window response wins over this one.
 			if (request === seriesRequest) seriesPoints = [];
@@ -673,11 +696,23 @@
 			points={seriesPoints}
 			from={chartWindow().from}
 			to={chartWindow().to}
-			bucketMs={chartBucketMs(chartWindow().from, chartWindow().to)}
+			bucketMs={seriesBucketMs}
 			groups={selectedGroups}
 			byRequest={groupRequests}
 			metric={chartMetric}
-			onMetricChange={(metric) => (chartMetric = metric)}
+			onMetricChange={(metric) => {
+				chartSelection = null;
+				chartMetric = metric;
+			}}
+			onSelect={(point) => {
+				autoScroll = false;
+				chartSelection = {
+					point,
+					bucketMs: seriesBucketMs,
+					byRequest: groupRequests,
+					fallbackGroup: selectedGroup ?? '',
+				};
+			}}
 			loading={seriesLoading}
 			onBrush={applyBrush}
 		/>
@@ -701,6 +736,8 @@
 		{/if}
 
 		<LogViewer
+			selection={chartSelection}
+			onSelectionClear={() => (chartSelection = null)}
 			lines={stream.lines}
 			status={stream.status}
 			error={stream.lastError}
@@ -723,8 +760,14 @@
 			receivedCount={stream.receivedCount}
 			onFilterChange={(value) => (filter = value)}
 			onPauseToggle={() => stream.togglePause()}
-			onClear={() => stream.clear()}
-			onAutoScrollToggle={() => (autoScroll = !autoScroll)}
+			onClear={() => {
+				chartSelection = null;
+				stream.clear();
+			}}
+			onAutoScrollToggle={() => {
+				chartSelection = null;
+				autoScroll = !autoScroll;
+			}}
 		/>
 	</div>
 </div>

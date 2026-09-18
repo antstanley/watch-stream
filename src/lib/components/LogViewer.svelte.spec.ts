@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LogLevel } from '$lib/log-buffer';
 import LogViewer from './LogViewer.svelte';
@@ -723,4 +723,57 @@ describe('LogViewer: grouping by request', () => {
 		await fireEvent.click(screen.getByTestId('group-toggle'));
 		expect(onGroupToggle).toHaveBeenCalledTimes(1);
 	});
+});
+
+it('expands and highlights a chart-selected request and scrolls vertically to it', async () => {
+	const lines = [
+		{ id: 'before', timestamp: 100, message: 'before' },
+		{
+			id: 'start',
+			timestamp: 1000,
+			message: 'start',
+			requestId: 'chosen',
+			group: 'app',
+			level: 'info' as const,
+		},
+		{
+			id: 'end',
+			timestamp: 2000,
+			message: 'end',
+			requestId: 'chosen',
+			group: 'app',
+			level: 'error' as const,
+		},
+	];
+	const { rerender } = render(LogViewer, { props: { lines, autoScroll: false, group: 'app' } });
+	const scroller = screen.getByTestId('log-scroller');
+	scroller.scrollLeft = 50;
+	const rect = vi
+		.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+		.mockImplementation(function (this: HTMLElement) {
+			return { top: this.dataset.chartSelected === 'true' ? 400 : 100 } as DOMRect;
+		});
+	try {
+		await rerender({
+			selection: {
+				point: { t: 1000, group: 'app', level: 'error', events: 1, requestId: 'chosen' },
+				bucketMs: 1000,
+				byRequest: true,
+				fallbackGroup: '',
+			},
+		});
+		await waitFor(() => expect(scroller.scrollTop).toBe(292));
+		expect(scroller.scrollLeft).toBe(50);
+		expect(screen.getByTestId('log-request-group').dataset.expanded).toBe('true');
+		expect(
+			screen.getAllByTestId('log-line').filter((row) => row.dataset.chartSelected === 'true'),
+		).toHaveLength(2);
+		scroller.scrollTop = 123;
+		await rerender({ lines: [...lines, { id: 'new', timestamp: 3000, message: 'incoming' }] });
+		expect(scroller.scrollTop).toBe(123);
+		await rerender({ filter: 'no matches' });
+		expect(screen.getByTestId('chart-selection-status').textContent).toContain('0 of 2');
+	} finally {
+		rect.mockRestore();
+	}
 });

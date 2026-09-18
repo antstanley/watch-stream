@@ -2,7 +2,7 @@
  * Request grouping: the one place that decides what a "request" is.
  *
  * CloudWatch Logs has no concept of a request. A request is a set of lines that
- * share a detected request id - a Lambda `REPORT RequestId: ...` line, an API
+ * share a log group and detected request id - a Lambda `REPORT RequestId: ...` line, an API
  * Gateway access log, a framework's structured `requestId` - and the same id
  * must produce the same group in the log view and in the chart. Both call the
  * helpers here, so a line that reads as one request in one view reads as one
@@ -61,15 +61,16 @@ function requestLevel(events: readonly LogEventDto[]): SeriesLevel {
 	return mostCriticalLevel(events.map((event) => effectiveLevel(event))) ?? 'unknown';
 }
 
-/** Groups events by request id, keeping every timestamp and byte of the originals. */
+/** Groups events by log group and request id, keeping every timestamp and byte of the originals. */
 export function collectRequests(events: readonly LogEventDto[]): RequestGroup[] {
 	const byId = new Map<string, RequestGroup>();
 	events.forEach((event, index) => {
 		const id = requestIdOf(event);
 		if (id === null) return;
-		const existing = byId.get(id);
+		const key = JSON.stringify([event.group ?? '', id]);
+		const existing = byId.get(key);
 		if (existing === undefined) {
-			byId.set(id, {
+			byId.set(key, {
 				id,
 				level: 'unknown',
 				first: event.timestamp,
@@ -113,7 +114,11 @@ export function requestRows(events: readonly LogEventDto[]): RequestRow[] {
 	events.forEach((event, index) => {
 		const group = at.get(index);
 		if (group !== undefined) {
-			rows.push({ kind: 'request', key: `req:${group.id}`, request: group });
+			rows.push({
+				kind: 'request',
+				key: `req:${JSON.stringify([group.events[0]?.event.group ?? '', group.id])}`,
+				request: group,
+			});
 			return;
 		}
 		// A line whose request was already emitted above belongs to that row.
