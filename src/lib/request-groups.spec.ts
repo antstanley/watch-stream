@@ -84,7 +84,7 @@ describe('requestRows', () => {
 			event(2, '{"requestId":"req-a"}'),
 		]);
 		expect(rows.map((row) => row.kind)).toEqual(['request', 'request']);
-		expect(rows[0]?.key).toBe('req:req-a');
+		expect(rows[0]?.key).toBe('req:["","req-a"]');
 		expect(rows[0]?.kind === 'request' ? rows[0].request.events.length : 0).toBe(2);
 	});
 
@@ -99,12 +99,12 @@ describe('requestRows', () => {
 		expect(rows[2]?.kind === 'line' ? rows[2].index : -1).toBe(2);
 	});
 
-	it('groups by an id shared across log groups', () => {
+	it('keeps an id shared across log groups separate', () => {
 		const rows = requestRows([
 			event(0, '{"requestId":"req-a"}', { group: '/aws/lambda/api' }),
 			event(1, '{"requestId":"req-a"}', { group: '/aws/apigateway/api' }),
 		]);
-		expect(rows).toHaveLength(1);
+		expect(rows).toHaveLength(2);
 	});
 });
 

@@ -1,4 +1,4 @@
-import { cleanup, render, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import EventScatter from './EventScatter.svelte';
 import type { SeriesPoint } from '$lib/types';
@@ -121,4 +121,26 @@ describe('EventScatter', () => {
 		expect(range?.to).toBeLessThanOrEqual(BASE + 8 * MINUTE);
 		expect(range?.to).toBeGreaterThan(range?.from ?? 0);
 	});
+});
+
+it('selects a point with mouse and keyboard without triggering the brush', async () => {
+	const onSelect = vi.fn<(point: SeriesPoint) => void>();
+	const onBrush = vi.fn<(range: { from: number; to: number } | null) => void>();
+	const point = points()[0];
+	const { container } = render(EventScatter, {
+		props: { points: [point], from: BASE, to: BASE + 8 * MINUTE, onSelect, onBrush },
+	});
+	const marker = await waitFor(() => {
+		const el = container.querySelector('[data-testid="scatter-point"]');
+		expect(el).not.toBeNull();
+		return el!;
+	});
+	marker.dispatchEvent(pointerEvent('pointerdown', 120));
+	window.dispatchEvent(pointerEvent('pointerup', 120));
+	await fireEvent.click(marker);
+	expect(onSelect).toHaveBeenLastCalledWith(point);
+	expect(onBrush).not.toHaveBeenCalled();
+	await fireEvent.keyDown(marker, { key: 'Enter' });
+	await fireEvent.keyDown(marker, { key: ' ' });
+	expect(onSelect).toHaveBeenCalledTimes(3);
 });

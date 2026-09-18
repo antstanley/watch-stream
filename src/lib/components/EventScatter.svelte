@@ -9,7 +9,7 @@
 	 * `window` while importing and its `ssr: true` path overflows the stack, so the
 	 * server sends the wrapper and the chart appears once mounted.
 	 */
-	import { ScatterChart, Tooltip, type BrushState, type ChartState } from 'layerchart';
+	import { ScatterChart, Points, Tooltip, type BrushState, type ChartState } from 'layerchart';
 	import { SERIES_LEVEL_COLOR } from '$lib/series-buckets';
 	import type { SeriesPoint, SeriesMetric } from '$lib/types';
 
@@ -17,6 +17,7 @@
 	export type BrushRange = { from: number; to: number };
 
 	type Props = {
+		onSelect?: (point: SeriesPoint) => void;
 		metric?: SeriesMetric;
 		/** Bucketed counts for the window; one row per bucket, group and level. */
 		points?: SeriesPoint[];
@@ -40,6 +41,7 @@
 		height = 200,
 		onBrush,
 		onBrushPreview,
+		onSelect,
 	}: Props = $props();
 
 	/**
@@ -146,6 +148,41 @@
 			onBrushEnd: handleBrushEnd,
 		}}
 	>
+		{#snippet marks({ context })}
+			{#each context.series.visibleSeries as series (series.key)}
+				<Points seriesKey={series.key} r={5}>
+					{#snippet children({ points })}
+						{#each points as point}
+							<circle
+								cx={point.x}
+								cy={point.y}
+								r={point.r}
+								fill={series.color}
+								stroke="#0a0a0a"
+								stroke-width="1"
+								class="cursor-pointer focus:stroke-white focus:stroke-2"
+								role="button"
+								tabindex="0"
+								data-testid="scatter-point"
+								aria-label={`Show ${point.data.requestId ?? `${point.data.events} ${point.data.level} events`} in ${point.data.group} at ${clockLabel(point.data.t)}`}
+								onpointerdowncapture={(event) => event.stopPropagation()}
+								onclick={(event) => {
+									event.stopPropagation();
+									onSelect?.(point.data);
+								}}
+								onkeydown={(event) => {
+									if (event.key === 'Enter' || event.key === ' ') {
+										event.preventDefault();
+										event.stopPropagation();
+										onSelect?.(point.data);
+									}
+								}}
+							/>
+						{/each}
+					{/snippet}
+				</Points>
+			{/each}
+		{/snippet}
 		{#snippet tooltip()}
 			<!--
 				The tooltip is styled here instead of being left to layerchart: its own
@@ -184,3 +221,10 @@
 		{/snippet}
 	</ScatterChart>
 </div>
+
+<style>
+	.w-full :global(.lc-highlight-point),
+	.w-full :global(.lc-highlight-line) {
+		pointer-events: none;
+	}
+</style>

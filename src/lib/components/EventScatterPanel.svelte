@@ -37,6 +37,7 @@
 	const loadChartModule: ChartLoader = () => import('./EventScatter.svelte');
 
 	type Props = {
+		onSelect?: (point: SeriesPoint) => void;
 		metric?: SeriesMetric;
 		onMetricChange?: (metric: SeriesMetric) => void;
 		/** Bucketed counts for the window. */
@@ -66,6 +67,7 @@
 	let {
 		metric = 'count',
 		onMetricChange,
+		onSelect,
 		points = [],
 		from = 0,
 		to = 0,
@@ -227,7 +229,7 @@
 				</span>
 			{:else}
 				<span class="ml-auto text-neutral-500" data-testid="scatter-hint">
-					drag to zoom · click to clear
+					select a point to show logs · drag to zoom · click background to clear
 				</span>
 			{/if}
 		{/if}
@@ -250,6 +252,7 @@
 				{#key `${chartKey}:${metric}`}
 					<Chart
 						{points}
+						{onSelect}
 						{metric}
 						{from}
 						{to}

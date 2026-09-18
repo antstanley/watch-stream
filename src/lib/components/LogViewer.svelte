@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
+	import { selectedChartEvents, type ChartSelection } from '$lib/chart-selection';
 	import ColumnResizer from './ColumnResizer.svelte';
 	import StatusBadge from './StatusBadge.svelte';
 	import { formatCount, formatSpan, formatTime, formatTimestamp } from '$lib/format';
@@ -30,6 +31,8 @@
 	} from '$lib/types';
 
 	type Props = {
+		selection?: ChartSelection | null;
+		onSelectionClear?: () => void;
 		/** Lines held by the client buffer, oldest first. */
 		lines?: LogEventDto[];
 		/** Connection status. */
@@ -84,6 +87,8 @@
 	};
 
 	let {
+		selection = null,
+		onSelectionClear,
 		lines = [],
 		status = 'idle',
 		error = null,
@@ -155,6 +160,7 @@
 
 	/** One rendered row, pre-formatted so the template stays declarative. */
 	type Row = {
+		selected: boolean;
 		key: string;
 		time: string;
 		timestamp: string;
@@ -207,8 +213,11 @@
 	const levelChip =
 		'rounded-md border px-2 py-1 text-xs font-medium transition-colors hover:border-neutral-700';
 
+	let selectedEvents = $derived(selectedChartEvents(lines, selection));
+
 	/** Lines matching the text filter and the level filter. */
 	let visible = $derived(filterByLevel(filterEvents(lines, filter), levelFilter));
+	let visibleSelectedCount = $derived(visible.filter((event) => selectedEvents.has(event)).length);
 
 	/** How many lines of each level are loaded, including `unknown`. */
 	let levelCounts = $derived.by(() => {
@@ -236,6 +245,7 @@
 				if (embedded !== null) expandable = JSON.stringify(embedded, null, 2);
 			}
 			return {
+				selected: selectedEvents.has(event),
 				key: eventKey(event, index),
 				time: formatTime(event.timestamp),
 				timestamp: formatTimestamp(event.timestamp),
@@ -368,8 +378,52 @@
 	$effect(() => {
 		// Reading the row count keeps this effect in sync with every appended batch.
 		const total = displayRows.length;
-		if (!autoScroll || scroller === null || total === 0) return;
+		if (selection !== null || !autoScroll || scroller === null || total === 0) return;
 		scroller.scrollTop = scroller.scrollHeight;
+	});
+
+	let firstSelectedKey = $derived(
+		displayRows.find((row) =>
+			row.kind === 'line' ? row.selected : row.children.some((child) => child.selected),
+		)?.key,
+	);
+
+	let scrolledSelection: ChartSelection | null = null;
+	let scrolledKey: string | undefined;
+
+	// Scroll once per selection (or when its first matching row arrives), after
+	// expanding request rows. Unrelated incoming lines must not steal the position.
+	$effect(() => {
+		const current = selection;
+		const first = firstSelectedKey;
+		if (current === null || first === undefined) {
+			scrolledSelection = null;
+			return;
+		}
+		if (current === scrolledSelection && first === scrolledKey) return;
+		untrack(() => {
+			const next = { ...expandedRows };
+			for (const row of displayRows) {
+				if (row.kind === 'request' && row.children.some((child) => child.selected))
+					next[row.key] = true;
+			}
+			expandedRows = next;
+		});
+		let cancelled = false;
+		void tick().then(() => {
+			if (cancelled || scroller === null) return undefined;
+			const target = scroller.querySelector<HTMLElement>('[data-chart-selected="true"]');
+			if (target) {
+				scrolledSelection = current;
+				scrolledKey = first;
+				scroller.scrollTop +=
+					target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+			}
+			return undefined;
+		});
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	/** Error text with the group and region context. */
@@ -640,6 +694,25 @@
 		</p>
 	{/if}
 
+	{#if selection !== null}
+		<div
+			class="flex items-center gap-2 px-3 py-1 text-xs text-sky-300"
+			role="status"
+			data-testid="chart-selection-status"
+		>
+			{#if selectedEvents.size === 0}
+				Selected logs are not in the loaded buffer. Zoom into this time range to load them.
+			{:else}
+				{visibleSelectedCount} of {selectedEvents.size} selected log lines visible{visibleSelectedCount <
+				selectedEvents.size
+					? ' — clear the text or level filter to see all'
+					: ''}.
+			{/if}
+			<button type="button" class="ml-auto underline" onclick={onSelectionClear}
+				>Clear selection</button
+			>
+		</div>
+	{/if}
 	<div
 		bind:this={scroller}
 		class="min-h-0 min-w-0 flex-1 overflow-auto bg-neutral-950"
@@ -673,6 +746,11 @@
 								? 'cursor-pointer'
 								: ''}"
 							data-testid="log-line"
+							data-chart-selected={row.selected ? 'true' : undefined}
+							class:bg-sky-950={row.selected}
+							class:ring-1={row.selected}
+							class:ring-inset={row.selected}
+							class:ring-sky-700={row.selected}
 							data-request-child={child ? 'true' : undefined}
 							data-level={row.level ?? 'unknown'}
 							data-expandable={expandable ? 'true' : undefined}
@@ -748,6 +826,10 @@
 							<li
 								class={listClass}
 								data-testid="log-request-group"
+								data-chart-selected={row.children.some((child) => child.selected)
+									? 'true'
+									: undefined}
+								class:bg-sky-950={row.children.some((child) => child.selected)}
 								data-request-id={row.id}
 								data-level={row.level}
 								data-expanded={open ? 'true' : undefined}

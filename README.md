@@ -53,7 +53,13 @@ and Lambda's `RequestId:` lines. Each request takes the severity of its most cri
 
 <img src="https://raw.githubusercontent.com/antstanley/watch-tail/v0.7.1/docs/watch-tail-requests.png" alt="watch-tail: an expanded checkout request showing its JSON payloads and Lambda log lines" width="1200">
 
-In **Historic**, drag across the chart to narrow the window. Click to clear the brush, or use
+Select a chart point to scroll to and highlight its loaded log lines. Requests expand automatically,
+and auto-scroll switches off so incoming logs do not move you away. Count points select all matching
+events or requests in that bucket; duration points select one request. Use **Clear selection** to
+remove the highlight. If filters hide selected lines or they are outside the loaded buffer, the
+viewer shows a message.
+
+In **Historic**, drag across the chart to narrow the window. Click the background to clear the brush, or use
 **Reset zoom** to restore the preset. CloudWatch charts reflect the events loaded into the viewer;
 archive charts query the whole selected window.
 
