@@ -1,5 +1,30 @@
 # watch-tail
 
+## 0.7.0
+
+### Minor Changes
+
+- [#19](https://github.com/antstanley/watch-tail/pull/19) [`6606840`](https://github.com/antstanley/watch-tail/commit/660684057e9c89a2b052c6ab233c5ad85ca891a6) Thanks [@antstanley](https://github.com/antstanley)! - Store default DuckDB archives separately for each AWS account and region. Verify account IDs with
+  STS before writing, isolate emulator endpoints, and cache account mappings for offline reads.
+  Region changes now select the matching archive for status, groups, logs, and charts. Existing archives
+  remain untouched and can be opened with the explicit `--db` file override.
+
+- [#22](https://github.com/antstanley/watch-tail/pull/22) [`25d62cf`](https://github.com/antstanley/watch-tail/commit/25d62cf6399e03583984f42858cba18cc3cf4117) Thanks [@antstanley](https://github.com/antstanley)! - Rename the project from `watch-stream` to `watch-tail` everywhere it still appeared, so the package,
+  the CLI, the docs and the source tree agree on one name. Environment variables are now
+  `WATCH_TAIL_REGIONS`, `WATCH_TAIL_LIMIT`, `WATCH_TAIL_ARCHIVE`, `WATCH_TAIL_ARCHIVE_DIR` and
+  `WATCH_TAIL_ARCHIVE_DB`, and the browser `localStorage` keys use the `watch-tail:` prefix. Set the new
+  names before upgrading: the old `WATCH_STREAM_*` variables are no longer read, and the renamed storage
+  keys reset saved layout preferences once.
+
+- [#21](https://github.com/antstanley/watch-tail/pull/21) [`74cdf61`](https://github.com/antstanley/watch-tail/commit/74cdf617a4b79b9ddc89a6d33df8e4db937ed378) Thanks [@antstanley](https://github.com/antstanley)! - Add a Count / Duration (ms) toggle to the chart. Duration mode plots each request at its first event
+  with elapsed milliseconds through its last event, adding the last event's JSON duration when present.
+  Supports CloudWatch and local archives, severity filters, request tooltips, and chart zoom.
+
+### Patch Changes
+
+- [#23](https://github.com/antstanley/watch-tail/pull/23) [`6dbba8f`](https://github.com/antstanley/watch-tail/commit/6dbba8fb65bfc72e2e2abde3a63806731e92c471) Thanks [@antstanley](https://github.com/antstanley)! - Refresh archive account mappings before reading, using cached identities only when lookup fails.
+  Resolve STS endpoints separately from CloudWatch Logs so Logs-specific endpoints do not disable archiving.
+
 ## 0.6.2
 
 ### Patch Changes
