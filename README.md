@@ -12,7 +12,7 @@ Uses your existing AWS credentials. Runs on your machine.
 [![license](https://img.shields.io/npm/l/watch-tail)](./LICENSE)
 [![node](https://img.shields.io/node/v/watch-tail)](package.json)
 
-<img src="https://raw.githubusercontent.com/antstanley/watch-tail/v0.6.2/docs/screenshot.png" alt="Historic logs from multiple groups, with severity chart and request grouping" width="1200">
+<img src="https://raw.githubusercontent.com/antstanley/watch-tail/v0.7.1/docs/watch-tail-overview.png" alt="watch-tail: historic logs from multiple groups, with severity chart and request grouping" width="1200">
 
 </div>
 
@@ -51,7 +51,7 @@ Grouping is on by default. Click a request row to expand its lines; use **By req
 individual events. IDs are detected from `requestId`, `request_id`, `awsRequestId`, `x-request-id`,
 and Lambda's `RequestId:` lines. Each request takes the severity of its most critical line.
 
-<img src="https://raw.githubusercontent.com/antstanley/watch-tail/v0.6.2/docs/requests.png" alt="An expanded checkout request showing its JSON payloads and Lambda log lines" width="1200">
+<img src="https://raw.githubusercontent.com/antstanley/watch-tail/v0.7.1/docs/watch-tail-requests.png" alt="watch-tail: an expanded checkout request showing its JSON payloads and Lambda log lines" width="1200">
 
 In **Historic**, drag across the chart to narrow the window. Click to clear the brush, or use
 **Reset zoom** to restore the preset. CloudWatch charts reflect the events loaded into the viewer;
@@ -74,7 +74,7 @@ watch-tail --db ./logs.duckdb   # choose an archive file
 watch-tail --no-archive        # disable archiving
 ```
 
-<img src="https://raw.githubusercontent.com/antstanley/watch-tail/v0.6.2/docs/archive.png" alt="Local archive replay with stored event counts and a severity chart" width="1200">
+<img src="https://raw.githubusercontent.com/antstanley/watch-tail/v0.7.1/docs/watch-tail-archive.png" alt="watch-tail: local archive replay with stored event counts and a severity chart" width="1200">
 
 Each AWS account and region gets its own `<account-id>/<region>/archive.duckdb` beneath:
 
