@@ -28,7 +28,7 @@ export const GET = async ({ url, request }: RequestEvent): Promise<Response> => 
 	if (!parsedRegion.ok) return apiError(400, REGION_PARAM_HINT, 'invalid-region');
 
 	const env = readEnv();
-	const config = resolveAwsConfig(env, parsedRegion.region);
+	const config = resolveAwsConfig(env, parsedRegion.region, 'sts');
 
 	let client;
 	let region: string;

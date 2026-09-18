@@ -94,7 +94,7 @@ function hasAmbientCredentials(env: Record<string, string | undefined>): boolean
 }
 
 /**
- * Resolves the region, endpoint, local flag and credential source for CloudWatch Logs.
+ * Resolves the region, endpoint, local flag and credential source for an AWS service.
  *
  * Region precedence: an explicit region parameter, then `AWS_REGION`, then
  * `AWS_DEFAULT_REGION`. When none of them is set the result is `null`, which
@@ -108,8 +108,11 @@ function hasAmbientCredentials(env: Record<string, string | undefined>): boolean
 export function resolveAwsConfig(
 	env: Record<string, string | undefined>,
 	regionParam?: string | null,
+	service: 'logs' | 'sts' = 'logs',
 ): AwsConfig {
-	const endpoint = normalize(env.AWS_ENDPOINT_URL_LOGS) ?? normalize(env.AWS_ENDPOINT_URL);
+	const endpoint =
+		normalize(service === 'sts' ? env.AWS_ENDPOINT_URL_STS : env.AWS_ENDPOINT_URL_LOGS) ??
+		normalize(env.AWS_ENDPOINT_URL);
 	const region =
 		normalize(regionParam) ?? normalize(env.AWS_REGION) ?? normalize(env.AWS_DEFAULT_REGION);
 	const local = endpoint !== null && isLocalEndpoint(endpoint);
@@ -369,7 +372,7 @@ export function describeAwsError(error: unknown): { message: string; code?: stri
 }
 
 /**
- * Creates an STS client with the same resolved settings as the Logs client.
+ * Creates an STS client with settings resolved for the STS service.
  *
  * Used for `GetCallerIdentity`, which answers the question the UI cannot: whose
  * credentials are these, if they work at all.

@@ -47,7 +47,7 @@ describe('account and region archive selection', () => {
 		});
 		const offline = new ArchiveLocator(lookup);
 		expect(await offline.locate(base, env, { readOnly: true })).toBe(path);
-		expect(lookup).not.toHaveBeenCalled();
+		expect(lookup).toHaveBeenCalledTimes(1);
 		await expect(offline.locate(base, env, {})).rejects.toThrow('expired SSO');
 		await expect(
 			offline.locate(base, { ...env, AWS_PROFILE: 'unknown' }, { readOnly: true }),
@@ -65,6 +65,45 @@ describe('account and region archive selection', () => {
 		expect(await locator.locate(base, {}, { readOnly: true })).toBe(second);
 	});
 
+	test.each([false, true])(
+		'refreshes read mappings after a profile changes account (restart=%s)',
+		async (restart) => {
+			const directory = root();
+			const base = join(directory, 'archive.duckdb');
+			const env = { AWS_PROFILE: 'work', AWS_REGION: 'eu-west-1' };
+			let account = '111111111111';
+			const lookup = vi.fn<() => Promise<{ account: string; region: string }>>(async () => ({
+				account,
+				region: 'eu-west-1',
+			}));
+			let locator = new ArchiveLocator(lookup);
+			await locator.locate(base, env, {});
+			account = '222222222222';
+			if (restart) locator = new ArchiveLocator(lookup);
+			const current = await locator.locate(base, env, { readOnly: true });
+			expect(current).toBe(join(directory, account, 'eu-west-1', 'archive.duckdb'));
+			expect(lookup).toHaveBeenCalledTimes(2);
+			const offline = new ArchiveLocator(async () => {
+				throw new Error('offline');
+			});
+			expect(await offline.locate(base, env, { readOnly: true })).toBe(current);
+		},
+	);
+
+	test('does not hide an invalid online identity behind a cached account', async () => {
+		const base = join(root(), 'archive.duckdb');
+		const lookup = vi.fn<() => Promise<{ account: string; region: string }>>(async () => ({
+			account: '111111111111',
+			region: 'eu-west-1',
+		}));
+		const locator = new ArchiveLocator(lookup);
+		await locator.locate(base, {}, {});
+		lookup.mockResolvedValueOnce({ account: '', region: 'eu-west-1' });
+		await expect(locator.locate(base, {}, { readOnly: true })).rejects.toThrow(
+			'valid archive account and region',
+		);
+	});
+
 	test('isolates custom endpoints from AWS and from each other', async () => {
 		const base = join(root(), 'archive.duckdb');
 		const locator = new ArchiveLocator(async () => ({
@@ -77,6 +116,31 @@ describe('account and region archive selection', () => {
 			),
 		);
 		expect(new Set(paths).size).toBe(3);
+	});
+
+	test('does not reuse an offline mapping from a different STS endpoint', async () => {
+		const base = join(root(), 'archive.duckdb');
+		const env = {
+			AWS_ENDPOINT_URL_LOGS: 'https://logs.example.test',
+			AWS_ENDPOINT_URL: 'https://first-sts.example.test',
+		};
+		const lookup = vi.fn<() => Promise<{ account: string; region: string }>>(async () => ({
+			account: '111111111111',
+			region: 'eu-west-1',
+		}));
+		const locator = new ArchiveLocator(lookup);
+		await locator.locate(base, env, {});
+		lookup.mockRejectedValue(new Error('offline'));
+		await expect(
+			locator.locate(
+				base,
+				{
+					...env,
+					AWS_ENDPOINT_URL: 'https://second-sts.example.test',
+				},
+				{ readOnly: true },
+			),
+		).rejects.toThrow('offline');
 	});
 
 	test('coalesces simultaneous identity calls and retries after failure', async () => {
