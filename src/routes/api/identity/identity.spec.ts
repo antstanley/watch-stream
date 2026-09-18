@@ -79,6 +79,16 @@ describe('GET /api/identity', () => {
 		expect(body.endpoint).toBe('http://localhost:4566');
 	});
 
+	test('uses the STS endpoint independently of the Logs endpoint', async () => {
+		envState.current = {
+			AWS_ENDPOINT_URL_LOGS: 'https://logs.example.test',
+			AWS_ENDPOINT_URL_STS: 'https://sts.example.test',
+		};
+		const response = await GET(requestEvent('http://localhost/api/identity'));
+		expect(response.status).toBe(200);
+		expect((await response.json()).endpoint).toBe('https://sts.example.test');
+	});
+
 	test('returns 400 for a malformed region', async () => {
 		const response = await GET(requestEvent('http://localhost/api/identity?region=US-EAST-1'));
 		expect(response.status).toBe(400);

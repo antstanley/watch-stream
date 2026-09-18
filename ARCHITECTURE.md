@@ -331,7 +331,8 @@ absolute file path prevents duplicate writers inside a process. All archive rout
 requested region; `/api/archive?region=...` reports that file's status.
 
 Verified account/region mappings are cached under `identities/`, keyed by a hash of credential-source
-selectors and endpoint/region. They contain no credentials and are used only for offline reads.
+selectors and endpoint/region. They contain no credentials. Reads re-check STS and use cached
+mappings only if lookup fails, so changing the account behind a profile refreshes archive selection.
 Writes re-check STS and never fall back to a cached account after an identity failure. Failed lookups
 are retried on subsequent requests. `WATCH_TAIL_ARCHIVE_DIR` overrides the root directory;
 `WATCH_TAIL_ARCHIVE_DB` / `--db` selects one explicit file instead, including legacy archives.
@@ -507,6 +508,7 @@ that file with the floci endpoint and its throwaway credentials.
 | ----------------------------------- | ----------------------------------------------------------------------- |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | Region before the ambient profile region; unset falls through           |
 | `AWS_ENDPOINT_URL_LOGS`             | CloudWatch Logs endpoint override (checked first)                       |
+| `AWS_ENDPOINT_URL_STS`              | STS endpoint override for identity and archive account verification     |
 | `AWS_ENDPOINT_URL`                  | Global endpoint override; set to `http://localhost:4566` for floci      |
 | `WATCH_TAIL_REGIONS`                | Narrow the picker; unset offers every CloudWatch Logs region            |
 | `WATCH_TAIL_LIMIT`                  | Default page size for `describe-log-groups`                             |
