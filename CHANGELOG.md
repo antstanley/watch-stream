@@ -1,5 +1,11 @@
 # watch-tail
 
+## 0.7.1
+
+### Patch Changes
+
+- [#24](https://github.com/antstanley/watch-tail/pull/24) [`3894339`](https://github.com/antstanley/watch-tail/commit/389433975edb20f59780399b3c57375608fb5d39) Thanks [@antstanley](https://github.com/antstanley)! - Refresh the README screenshots with the current watch-tail branding and chart controls.
+
 ## 0.7.0
 
 ### Minor Changes
