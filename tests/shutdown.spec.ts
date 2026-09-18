@@ -53,7 +53,7 @@ function startServer(): Running {
 			HOST: '127.0.0.1',
 			// No AWS credentials and no archive: the health check and the stream's
 			// ready frame do not need either, and this never touches a real file.
-			WATCH_STREAM_ARCHIVE: 'off',
+			WATCH_TAIL_ARCHIVE: 'off',
 			AWS_ENDPOINT_URL: 'http://127.0.0.1:4597',
 			AWS_ENDPOINT_URL_LOGS: 'http://127.0.0.1:4597',
 			AWS_ACCESS_KEY_ID: 'test',

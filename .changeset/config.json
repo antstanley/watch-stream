@@ -3,7 +3,7 @@
 	"changelog": [
 		"@changesets/changelog-github",
 		{
-			"repo": "antstanley/watch-stream"
+			"repo": "antstanley/watch-tail"
 		}
 	],
 	"commit": false,

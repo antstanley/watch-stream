@@ -107,7 +107,7 @@ describe('resolveArchiveConfig', () => {
 
 	test('prefers an explicit database path', () => {
 		expect(
-			resolveArchiveConfig({ WATCH_STREAM_ARCHIVE_DB: '/tmp/logs.duckdb' }, 'darwin', '/Users/dev'),
+			resolveArchiveConfig({ WATCH_TAIL_ARCHIVE_DB: '/tmp/logs.duckdb' }, 'darwin', '/Users/dev'),
 		).toEqual({
 			enabled: true,
 			path: '/tmp/logs.duckdb',
@@ -115,13 +115,13 @@ describe('resolveArchiveConfig', () => {
 	});
 
 	test.each(['off', '0', 'false', 'NO', ' off '])('reads %s as disabled', (value) => {
-		const config = resolveArchiveConfig({ WATCH_STREAM_ARCHIVE: value }, 'linux', '/home/dev');
+		const config = resolveArchiveConfig({ WATCH_TAIL_ARCHIVE: value }, 'linux', '/home/dev');
 		expect(config.enabled).toBe(false);
 		expect(config.path.endsWith(ARCHIVE_FILE_NAME)).toBe(true);
 	});
 
 	test('any other value keeps the archive on', () => {
-		expect(resolveArchiveConfig({ WATCH_STREAM_ARCHIVE: 'on' }, 'linux', '/home/dev').enabled).toBe(
+		expect(resolveArchiveConfig({ WATCH_TAIL_ARCHIVE: 'on' }, 'linux', '/home/dev').enabled).toBe(
 			true,
 		);
 	});
@@ -133,19 +133,19 @@ describe('resolveArchiveConfig', () => {
 
 	test('a test can opt in explicitly', () => {
 		expect(
-			resolveArchiveConfig({ VITEST: 'true', WATCH_STREAM_ARCHIVE: 'on' }, 'linux', '/home/dev')
+			resolveArchiveConfig({ VITEST: 'true', WATCH_TAIL_ARCHIVE: 'on' }, 'linux', '/home/dev')
 				.enabled,
 		).toBe(true);
 		expect(
 			resolveArchiveConfig(
-				{ VITEST: 'true', WATCH_STREAM_ARCHIVE_DB: '/tmp/t.duckdb' },
+				{ VITEST: 'true', WATCH_TAIL_ARCHIVE_DB: '/tmp/t.duckdb' },
 				'linux',
 				'/home/dev',
 			),
 		).toMatchObject({ enabled: true, path: '/tmp/t.duckdb' });
 		expect(
 			resolveArchiveConfig(
-				{ VITEST: 'true', WATCH_STREAM_ARCHIVE: 'off', WATCH_STREAM_ARCHIVE_DB: '/tmp/t.duckdb' },
+				{ VITEST: 'true', WATCH_TAIL_ARCHIVE: 'off', WATCH_TAIL_ARCHIVE_DB: '/tmp/t.duckdb' },
 				'linux',
 				'/home/dev',
 			).enabled,

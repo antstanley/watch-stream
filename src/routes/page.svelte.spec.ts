@@ -402,11 +402,11 @@ describe('page: grouping by request', () => {
 				true,
 			),
 		);
-		expect(localStorage.getItem('watch-stream:group-requests')).toBe('false');
+		expect(localStorage.getItem('watch-tail:group-requests')).toBe('false');
 	});
 
 	it('starts grouped off when the stored preference says so', async () => {
-		localStorage.setItem('watch-stream:group-requests', 'false');
+		localStorage.setItem('watch-tail:group-requests', 'false');
 		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
 		await renderPage();
 

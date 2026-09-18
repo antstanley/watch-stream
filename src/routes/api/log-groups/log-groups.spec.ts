@@ -142,8 +142,8 @@ describe('GET /api/log-groups', () => {
 		},
 	);
 
-	test('uses WATCH_STREAM_LIMIT as the default result count', async () => {
-		envState.current = { AWS_REGION: 'eu-west-1', WATCH_STREAM_LIMIT: '2' };
+	test('uses WATCH_TAIL_LIMIT as the default result count', async () => {
+		envState.current = { AWS_REGION: 'eu-west-1', WATCH_TAIL_LIMIT: '2' };
 		queueSend([
 			{
 				logGroups: [{ logGroupName: '/a' }, { logGroupName: '/b' }, { logGroupName: '/c' }],
@@ -155,8 +155,8 @@ describe('GET /api/log-groups', () => {
 		expect(body.groups.map((group) => group.name)).toEqual(['/a', '/b']);
 	});
 
-	test('ignores a misconfigured WATCH_STREAM_LIMIT', async () => {
-		envState.current = { AWS_REGION: 'eu-west-1', WATCH_STREAM_LIMIT: 'lots' };
+	test('ignores a misconfigured WATCH_TAIL_LIMIT', async () => {
+		envState.current = { AWS_REGION: 'eu-west-1', WATCH_TAIL_LIMIT: 'lots' };
 		const response = await GET(requestEvent(''));
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
@@ -167,8 +167,8 @@ describe('GET /api/log-groups', () => {
 		});
 	});
 
-	test('lets the query parameter win over WATCH_STREAM_LIMIT', async () => {
-		envState.current = { AWS_REGION: 'eu-west-1', WATCH_STREAM_LIMIT: '2' };
+	test('lets the query parameter win over WATCH_TAIL_LIMIT', async () => {
+		envState.current = { AWS_REGION: 'eu-west-1', WATCH_TAIL_LIMIT: '2' };
 		queueSend([
 			{
 				logGroups: [{ logGroupName: '/a' }, { logGroupName: '/b' }, { logGroupName: '/c' }],

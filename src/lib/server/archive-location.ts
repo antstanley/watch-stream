@@ -48,7 +48,7 @@ export class ArchiveLocator {
 
 	async locate(basePath: string, env: Env, selection: ArchiveSelection): Promise<string> {
 		const config = resolveAwsConfig(env, selection.region);
-		const root = env.WATCH_STREAM_ARCHIVE_DIR?.trim() || dirname(basePath);
+		const root = env.WATCH_TAIL_ARCHIVE_DIR?.trim() || dirname(basePath);
 		// Include credential-source selectors, never persist credentials themselves.
 		const key = hash(
 			JSON.stringify([

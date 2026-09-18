@@ -15,12 +15,12 @@
 		"tail",
 		"tailwindcss"
 	],
-	"homepage": "https://github.com/antstanley/watch-stream#readme",
-	"bugs": "https://github.com/antstanley/watch-stream/issues",
+	"homepage": "https://github.com/antstanley/watch-tail#readme",
+	"bugs": "https://github.com/antstanley/watch-tail/issues",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/antstanley/watch-stream.git"
+		"url": "git+https://github.com/antstanley/watch-tail.git"
 	},
 	"bin": {
 		"watch-tail": "./dist/cli/bin.js",
@@ -60,7 +60,7 @@
 		"floci:up": "floci start && node scripts/floci-env.ts",
 		"seed": "node scripts/seed-floci.ts",
 		"seed:watch": "node scripts/seed-floci.ts --watch",
-		"test:e2e": "WATCH_STREAM_E2E=1 vitest run --project integration",
+		"test:e2e": "WATCH_TAIL_E2E=1 vitest run --project integration",
 		"dev:aws": "node scripts/dev.ts",
 		"start:aws": "node scripts/dev.ts --start",
 		"test:ui": "node scripts/ui-smoke.ts",

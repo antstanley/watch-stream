@@ -1,5 +1,5 @@
 /**
- * Browser-side fetch helpers for the watch-stream JSON API (`/api/health`, `/api/regions`,
+ * Browser-side fetch helpers for the watch-tail JSON API (`/api/health`, `/api/regions`,
  * `/api/log-groups`, `/api/archive`). Every helper throws {@link ApiError} on a non-2xx response so
  * the UI can show the API `error` message instead of an opaque failure.
  */
@@ -279,7 +279,7 @@ export function describeGroupsError(region: string, error: unknown): string {
 		return `Could not list log groups in ${region}: ${trimSentence(error.message)}.${details}`;
 	}
 	const detail = error instanceof Error && error.message !== '' ? error.message : String(error);
-	return `Could not reach the watch-stream API for ${region}. ${detail}`;
+	return `Could not reach the watch-tail API for ${region}. ${detail}`;
 }
 
 /** Adds group and region context to a stream error payload. */

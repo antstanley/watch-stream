@@ -47,11 +47,11 @@ never sees publish credentials.
 2. **Trusted publisher** for `watch-tail` on npm (or, before the package exists, from the CLI):
 
    ```bash
-   npm trust github watch-tail --repo antstanley/watch-stream --file release.yml --allow-stage-publish
+   npm trust github watch-tail --repo antstanley/watch-tail --file release.yml --allow-stage-publish
    ```
 
    On the npm website: _Package → Settings → Trusted Publishing_, repository
-   `antstanley/watch-stream`, workflow `release.yml`, "Allow npm stage publish" checked.
+   `antstanley/watch-tail`, workflow `release.yml`, "Allow npm stage publish" checked.
 
 3. **Require 2FA for publishing** (disables token publishing):
 

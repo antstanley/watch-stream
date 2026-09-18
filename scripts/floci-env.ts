@@ -111,7 +111,7 @@ async function main(): Promise<void> {
 	console.log(`Wrote ${envFile}`);
 	console.log(`  AWS_ENDPOINT_URL=${endpoint}`);
 	console.log(`  AWS_DEFAULT_REGION=${values.AWS_DEFAULT_REGION ?? 'us-east-1'}`);
-	console.log('  WATCH_STREAM_REGIONS=<unset: the picker offers every CloudWatch Logs region>');
+	console.log('  WATCH_TAIL_REGIONS=<unset: the picker offers every CloudWatch Logs region>');
 	console.log('\nNext: pnpm seed   (create sample log groups and events)');
 }
 

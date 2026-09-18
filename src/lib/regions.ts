@@ -1,5 +1,5 @@
 /**
- * Regions offered by the picker when `WATCH_STREAM_REGIONS` is not set.
+ * Regions offered by the picker when `WATCH_TAIL_REGIONS` is not set.
  *
  * The list is every AWS region in the standard `aws` partition that publishes a
  * CloudWatch Logs endpoint, taken from the AWS CLI's own endpoint data
@@ -9,7 +9,7 @@
  *
  * Shared by the server (`src/lib/server/regions.ts`) and the browser
  * (`src/lib/groups-client.ts`) so both agree on the same set.
- * Narrow it per deployment with `WATCH_STREAM_REGIONS=eu-west-1,af-south-1`.
+ * Narrow it per deployment with `WATCH_TAIL_REGIONS=eu-west-1,af-south-1`.
  */
 export const REGION_CODES: readonly string[] = [
 	'us-east-1',

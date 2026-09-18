@@ -25,9 +25,9 @@ describe('FALLBACK_REGIONS', () => {
 		expect(FALLBACK_REGIONS).toContain('af-south-1');
 	});
 
-	test('accepts af-south-1 from WATCH_STREAM_REGIONS', () => {
+	test('accepts af-south-1 from WATCH_TAIL_REGIONS', () => {
 		const { regions, defaultRegion } = resolveRegions({
-			WATCH_STREAM_REGIONS: 'af-south-1,eu-west-1',
+			WATCH_TAIL_REGIONS: 'af-south-1,eu-west-1',
 			AWS_REGION: 'af-south-1',
 		});
 		expect(defaultRegion).toBe('af-south-1');
@@ -46,7 +46,7 @@ describe('resolveRegions', () => {
 
 	test('parses, trims, de-duplicates and keeps order', () => {
 		const { regions } = resolveRegions({
-			WATCH_STREAM_REGIONS: ' eu-west-1 , us-east-1,eu-west-1,, ap-south-1 ',
+			WATCH_TAIL_REGIONS: ' eu-west-1 , us-east-1,eu-west-1,, ap-south-1 ',
 			AWS_REGION: 'us-east-1',
 		});
 		expect(regions).toEqual(['eu-west-1', 'us-east-1', 'ap-south-1']);
@@ -54,7 +54,7 @@ describe('resolveRegions', () => {
 
 	test('prepends the default region when it is missing', () => {
 		const { regions, defaultRegion } = resolveRegions({
-			WATCH_STREAM_REGIONS: 'eu-west-1,eu-central-1',
+			WATCH_TAIL_REGIONS: 'eu-west-1,eu-central-1',
 			AWS_REGION: 'ap-south-1',
 		});
 		expect(defaultRegion).toBe('ap-south-1');
@@ -62,13 +62,13 @@ describe('resolveRegions', () => {
 	});
 
 	test('ignores an empty or blank env var', () => {
-		expect(resolveRegions({ WATCH_STREAM_REGIONS: '   ,  ' }).regions).toEqual(FALLBACK_REGIONS);
-		expect(resolveRegions({ WATCH_STREAM_REGIONS: '' }).regions).toEqual(FALLBACK_REGIONS);
+		expect(resolveRegions({ WATCH_TAIL_REGIONS: '   ,  ' }).regions).toEqual(FALLBACK_REGIONS);
+		expect(resolveRegions({ WATCH_TAIL_REGIONS: '' }).regions).toEqual(FALLBACK_REGIONS);
 	});
 
 	test('takes the default region from AWS_DEFAULT_REGION as well', () => {
 		const { regions, defaultRegion } = resolveRegions({
-			WATCH_STREAM_REGIONS: 'us-west-1',
+			WATCH_TAIL_REGIONS: 'us-west-1',
 			AWS_DEFAULT_REGION: 'us-west-2',
 		});
 		expect(defaultRegion).toBe('us-west-2');
@@ -92,7 +92,7 @@ describe('resolveRegions', () => {
 
 	test('prepends the effective region before a configured list', () => {
 		const { regions, defaultRegion } = resolveRegions(
-			{ WATCH_STREAM_REGIONS: 'eu-west-1,us-east-1' },
+			{ WATCH_TAIL_REGIONS: 'eu-west-1,us-east-1' },
 			'ap-south-1',
 		);
 		expect(defaultRegion).toBe('ap-south-1');
@@ -112,10 +112,7 @@ describe('resolveRegions', () => {
 	});
 
 	test('keeps the default region unique when it is already in the list', () => {
-		const { regions } = resolveRegions(
-			{ WATCH_STREAM_REGIONS: 'us-east-1,eu-west-1' },
-			'us-east-1',
-		);
+		const { regions } = resolveRegions({ WATCH_TAIL_REGIONS: 'us-east-1,eu-west-1' }, 'us-east-1');
 		expect(regions).toEqual(['us-east-1', 'eu-west-1']);
 	});
 });

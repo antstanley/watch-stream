@@ -176,7 +176,7 @@ describe('LogViewer layout controls', () => {
 
 	it('truncates a long Lambda stream name so the message stays visible', () => {
 		const longStream =
-			'2026/09/11/watch-stream-demo-backend-WhatsAppApiWebh0okFnE1B794-V02WQc7jN0VN[$LATEST]a2561676c1814e2d8bf96571caf8fb57';
+			'2026/09/11/watch-tail-demo-backend-WhatsAppApiWebh0okFnE1B794-V02WQc7jN0VN[$LATEST]a2561676c1814e2d8bf96571caf8fb57';
 		render(LogViewer, {
 			props: {
 				lines: [{ ...LINES[0], streamName: longStream }],
@@ -226,15 +226,15 @@ describe('LogViewer layout controls', () => {
 		await fireEvent.click(screen.getByTestId('wrap-toggle'));
 		await fireEvent.keyDown(screen.getByTestId('prefix-resizer'), { key: 'ArrowRight' });
 
-		expect(localStorage.getItem('watch-stream:json-view')).toBe('false');
-		expect(localStorage.getItem('watch-stream:wrap')).toBe('true');
-		expect(localStorage.getItem('watch-stream:prefix-width')).toBe('240');
+		expect(localStorage.getItem('watch-tail:json-view')).toBe('false');
+		expect(localStorage.getItem('watch-tail:wrap')).toBe('true');
+		expect(localStorage.getItem('watch-tail:prefix-width')).toBe('240');
 	});
 
 	it('restores the stored preferences on mount', async () => {
-		localStorage.setItem('watch-stream:json-view', 'false');
-		localStorage.setItem('watch-stream:wrap', 'true');
-		localStorage.setItem('watch-stream:prefix-width', '320');
+		localStorage.setItem('watch-tail:json-view', 'false');
+		localStorage.setItem('watch-tail:wrap', 'true');
+		localStorage.setItem('watch-tail:prefix-width', '320');
 
 		render(LogViewer, { props: { lines: LINES, group: '/aws/app' } });
 		await Promise.resolve();

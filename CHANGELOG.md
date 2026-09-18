@@ -12,7 +12,7 @@
 
 ### Patch Changes
 
-- [#17](https://github.com/antstanley/watch-stream/pull/17) [`a50659c`](https://github.com/antstanley/watch-stream/commit/a50659cfe765c8aa3078fd2934674b32c30b2ec7) Thanks [@antstanley](https://github.com/antstanley)! - Stop the server immediately when it is streaming.
+- [#17](https://github.com/antstanley/watch-tail/pull/17) [`a50659c`](https://github.com/antstanley/watch-tail/commit/a50659cfe765c8aa3078fd2934674b32c30b2ec7) Thanks [@antstanley](https://github.com/antstanley)! - Stop the server immediately when it is streaming.
 
   adapter-node shuts down gracefully: on Ctrl+C it stops accepting connections and waits for the ones
   already open, force-closing them only after `SHUTDOWN_TIMEOUT` - thirty seconds by default. A live tail
@@ -28,7 +28,7 @@
 
 ### Minor Changes
 
-- [#15](https://github.com/antstanley/watch-stream/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-stream/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Group the lines of a request into one row, in the log view and in the chart.
+- [#15](https://github.com/antstanley/watch-tail/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-tail/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Group the lines of a request into one row, in the log view and in the chart.
 
   A request id is read from each line - a declared `requestId` (also `request_id`, `awsRequestId`,
   `x-request-id`) or the `RequestId: ...` a Lambda prints - and the lines that share it become one row in
@@ -45,7 +45,7 @@
 
 ### Patch Changes
 
-- [#15](https://github.com/antstanley/watch-stream/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-stream/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Give the chart tooltip a background.
+- [#15](https://github.com/antstanley/watch-tail/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-tail/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Give the chart tooltip a background.
 
   layerchart draws its tooltip with colours that come from `--color-surface-*` variables, which only its
   framework presets (shadcn-svelte, Skeleton, daisyUI) define. This app imports none of them, so the
@@ -53,7 +53,7 @@
   own panel styling (dark background, border, light text, elevation shadow), and the browser smoke run
   checks the rendered colours so it cannot regress unnoticed.
 
-- [#15](https://github.com/antstanley/watch-stream/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-stream/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Make Ctrl+C stop the CLI while a prompt is open.
+- [#15](https://github.com/antstanley/watch-tail/pull/15) [`d9ec39b`](https://github.com/antstanley/watch-tail/commit/d9ec39b66aedfa21798e8277525795ec473fe11a) Thanks [@antstanley](https://github.com/antstanley)! - Make Ctrl+C stop the CLI while a prompt is open.
 
   Cancelling one of the CLI's questions (the login offer, the profile picker) was read as "No" - so
   Ctrl+C at that prompt looked like it did nothing, and the process carried on with its server still
@@ -68,7 +68,7 @@
 
 ### Minor Changes
 
-- [`820a176`](https://github.com/antstanley/watch-stream/commit/820a176f3b47c7c6dafdf726729ac4d526e32458) Thanks [@antstanley](https://github.com/antstanley)! - Keep a local DuckDB archive of everything you stream, and browse it without AWS
+- [`820a176`](https://github.com/antstanley/watch-tail/commit/820a176f3b47c7c6dafdf726729ac4d526e32458) Thanks [@antstanley](https://github.com/antstanley)! - Keep a local DuckDB archive of everything you stream, and browse it without AWS
 
   Every event that arrives while a stream is open is now appended to a local DuckDB file
   (`~/Library/Application Support/watch-tail/archive.duckdb` on macOS, the equivalent data directory
@@ -88,7 +88,7 @@
   - The DuckDB driver is an optional dependency: without it the app behaves exactly as before and says
     so on startup.
 
-- [#14](https://github.com/antstanley/watch-stream/pull/14) [`9529416`](https://github.com/antstanley/watch-stream/commit/95294160d1746d82d449e0d83ce53487d0779258) Thanks [@antstanley](https://github.com/antstanley)! - See the shape of an incident: a level-coloured scatter chart, brushing, and several groups at once
+- [#14](https://github.com/antstanley/watch-tail/pull/14) [`9529416`](https://github.com/antstanley/watch-tail/commit/95294160d1746d82d449e0d83ce53487d0779258) Thanks [@antstanley](https://github.com/antstanley)! - See the shape of an incident: a level-coloured scatter chart, brushing, and several groups at once
 
   A scatter chart now sits above the log view. X is time, Y is the number of events in a bucket, and
   every level gets its own colour, so a spike reads as errors or as noise before you scroll a single
@@ -119,7 +119,7 @@
 
 ### Minor Changes
 
-- [#11](https://github.com/antstanley/watch-stream/pull/11) [`74ee9c3`](https://github.com/antstanley/watch-stream/commit/74ee9c361d8b2d6e0f3ea38469064d74f90a6116) Thanks [@antstanley](https://github.com/antstanley)! - Open a single log line's JSON on click, and give the app its own icon.
+- [#11](https://github.com/antstanley/watch-tail/pull/11) [`74ee9c3`](https://github.com/antstanley/watch-tail/commit/74ee9c361d8b2d6e0f3ea38469064d74f90a6116) Thanks [@antstanley](https://github.com/antstanley)! - Open a single log line's JSON on click, and give the app its own icon.
 
   With pretty-printing switched off, a line that carries JSON shows a marker and
   opens on click: the raw line stays where it is and the payload appears beneath
@@ -130,7 +130,7 @@
   The stock framework icon is replaced with one of our own: a log window with the
   newest line highlighted.
 
-- [#12](https://github.com/antstanley/watch-stream/pull/12) [`5214ef5`](https://github.com/antstanley/watch-stream/commit/5214ef52336a0b91d4495113349becc0aaac2f90) Thanks [@antstanley](https://github.com/antstanley)! - Check a chosen profile with STS before offering to log it in.
+- [#12](https://github.com/antstanley/watch-tail/pull/12) [`5214ef5`](https://github.com/antstanley/watch-tail/commit/5214ef52336a0b91d4495113349becc0aaac2f90) Thanks [@antstanley](https://github.com/antstanley)! - Check a chosen profile with STS before offering to log it in.
 
   Picking a profile no longer assumes it needs a login: the CLI restarts with it and
   asks `sts:GetCallerIdentity` about _that_ profile, so a profile whose SSO session
@@ -146,7 +146,7 @@
 
 ### Patch Changes
 
-- [#9](https://github.com/antstanley/watch-stream/pull/9) [`7bdd21f`](https://github.com/antstanley/watch-stream/commit/7bdd21f6dcd52e498736c5d7ea2dcd2a1c1ef255) Thanks [@antstanley](https://github.com/antstanley)! - Ask which AWS profile to use when credentials fail, and keep prompts working with NO_COLOR set.
+- [#9](https://github.com/antstanley/watch-tail/pull/9) [`7bdd21f`](https://github.com/antstanley/watch-tail/commit/7bdd21f6dcd52e498736c5d7ea2dcd2a1c1ef255) Thanks [@antstanley](https://github.com/antstanley)! - Ask which AWS profile to use when credentials fail, and keep prompts working with NO_COLOR set.
 
   With several profiles configured, a credential failure assumed the ambient default
   and offered to log in there - rarely the account someone meant. The CLI now asks
@@ -164,7 +164,7 @@
 
 ### Patch Changes
 
-- [#7](https://github.com/antstanley/watch-stream/pull/7) [`1f7a31a`](https://github.com/antstanley/watch-stream/commit/1f7a31a0b6769e19a6f1a222714b89ea860af6c0) Thanks [@antstanley](https://github.com/antstanley)! - Stop a development `.env.local` from silently redirecting the CLI at the emulator.
+- [#7](https://github.com/antstanley/watch-tail/pull/7) [`1f7a31a`](https://github.com/antstanley/watch-tail/commit/1f7a31a0b6769e19a6f1a222714b89ea860af6c0) Thanks [@antstanley](https://github.com/antstanley)! - Stop a development `.env.local` from silently redirecting the CLI at the emulator.
 
   Running `watch-tail` inside a checkout that has a `.env.local` (written by
   `pnpm floci:env` for the dev server) pointed the whole UI at floci instead of
@@ -176,7 +176,7 @@
 
 ### Minor Changes
 
-- [#5](https://github.com/antstanley/watch-stream/pull/5) [`3fa9cf0`](https://github.com/antstanley/watch-stream/commit/3fa9cf06335dea11cd936fe317f18f703e408393) Thanks [@antstanley](https://github.com/antstanley)! - Detect unusable AWS credentials at startup, and offer the login that fixes them.
+- [#5](https://github.com/antstanley/watch-tail/pull/5) [`3fa9cf0`](https://github.com/antstanley/watch-tail/commit/3fa9cf06335dea11cd936fe317f18f703e408393) Thanks [@antstanley](https://github.com/antstanley)! - Detect unusable AWS credentials at startup, and offer the login that fixes them.
 
   The CLI now asks the running app for one log group before opening the browser. If
   AWS refuses because of credentials, it reads how the profile is configured and
@@ -191,7 +191,7 @@
 
 ### Patch Changes
 
-- [#3](https://github.com/antstanley/watch-stream/pull/3) [`5916b69`](https://github.com/antstanley/watch-stream/commit/5916b694c9574c55f656ea35804463a4305c0331) Thanks [@antstanley](https://github.com/antstanley)! - Make shell completions complete the values that matter.
+- [#3](https://github.com/antstanley/watch-tail/pull/3) [`5916b69`](https://github.com/antstanley/watch-tail/commit/5916b694c9574c55f656ea35804463a4305c0331) Thanks [@antstanley](https://github.com/antstanley)! - Make shell completions complete the values that matter.
 
   `--profile` now offers the profiles from your own AWS config instead of just
   `default`, `--region` offers the CloudWatch Logs region list, `--open` is
@@ -203,7 +203,7 @@
 
 ### Minor Changes
 
-- [#1](https://github.com/antstanley/watch-stream/pull/1) [`bc807a3`](https://github.com/antstanley/watch-stream/commit/bc807a38bbfc4aae92252a3e0871a8a41de556bd) Thanks [@antstanley](https://github.com/antstanley)! - Add a `wt` shorthand for the CLI.
+- [#1](https://github.com/antstanley/watch-tail/pull/1) [`bc807a3`](https://github.com/antstanley/watch-tail/commit/bc807a38bbfc4aae92252a3e0871a8a41de556bd) Thanks [@antstanley](https://github.com/antstanley)! - Add a `wt` shorthand for the CLI.
 
   Installing the package globally now provides `wt` alongside `watch-tail`, so the
   common case is three characters: `wt --profile my-profile`. Both names run the
@@ -213,7 +213,7 @@
 
 ### Minor Changes
 
-- [`17766f5`](https://github.com/antstanley/watch-stream/commit/17766f594f6c7135bf53ec895e3f3acc04ce4faf) Thanks [@antstanley](https://github.com/antstanley)! - First public release of `watch-tail`.
+- [`17766f5`](https://github.com/antstanley/watch-tail/commit/17766f594f6c7135bf53ec895e3f3acc04ce4faf) Thanks [@antstanley](https://github.com/antstanley)! - First public release of `watch-tail`.
 
   `npx watch-tail` starts a local UI for Amazon CloudWatch Logs and streams a log
   group into your browser: region and group pickers, live tailing over SSE, historic

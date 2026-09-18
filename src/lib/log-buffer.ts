@@ -1,5 +1,5 @@
 /**
- * Pure client-side log storage and filtering for the watch-stream UI.
+ * Pure client-side log storage and filtering for the watch-tail UI.
  *
  * Design decisions (kept in one place so the UI stays predictable):
  *

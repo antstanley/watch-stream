@@ -65,11 +65,11 @@ describe('GET /api/regions', () => {
 		expect(body.regions[0]).toBe('us-gov-west-1');
 	});
 
-	test('honours WATCH_STREAM_REGIONS and the configured default region', async () => {
+	test('honours WATCH_TAIL_REGIONS and the configured default region', async () => {
 		envState.current = {
 			AWS_DEFAULT_REGION: 'us-east-2',
 			AWS_ENDPOINT_URL: 'http://localhost:4566',
-			WATCH_STREAM_REGIONS: ' eu-west-1 , us-east-2 ',
+			WATCH_TAIL_REGIONS: ' eu-west-1 , us-east-2 ',
 		};
 		const body = (await (await GET(requestEvent('http://localhost/api/regions'))).json()) as Body;
 		expect(body.defaultRegion).toBe('us-east-2');
@@ -78,7 +78,7 @@ describe('GET /api/regions', () => {
 	});
 
 	test('prepends a default region that is missing from the configured list', async () => {
-		envState.current = { WATCH_STREAM_REGIONS: 'us-west-2' };
+		envState.current = { WATCH_TAIL_REGIONS: 'us-west-2' };
 		mocks.region.mockResolvedValue('ap-south-1');
 		const body = (await (await GET(requestEvent('http://localhost/api/regions'))).json()) as Body;
 		expect(body.defaultRegion).toBe('ap-south-1');

@@ -1,6 +1,6 @@
-# watch-stream architecture
+# watch-tail architecture
 
-`watch-stream` tails Amazon CloudWatch Logs and streams them into a local web UI.
+`watch-tail` tails Amazon CloudWatch Logs and streams them into a local web UI.
 
 ```
 Browser (SvelteKit client)
@@ -90,13 +90,13 @@ untouched SDK provider chain (`credentials: "ambient"`).
 ```
 
 `defaultRegion` is the region the server will use when a request does not name one, and it is
-prepended to `regions` when `WATCH_STREAM_REGIONS` does not include it, so the picker can show one
+prepended to `regions` when `WATCH_TAIL_REGIONS` does not include it, so the picker can show one
 entry more than the configured list.
 
 The default list is `REGION_CODES` in `src/lib/regions.ts`: every region in the standard `aws`
 partition that publishes a CloudWatch Logs endpoint (derived from the AWS CLI's
 `botocore/data/endpoints.json`), including `af-south-1`. China, GovCloud and the ISO partitions are
-excluded; set `WATCH_STREAM_REGIONS` to override the list entirely.
+excluded; set `WATCH_TAIL_REGIONS` to override the list entirely.
 
 ### `GET /api/identity?region=<region>`
 
@@ -209,7 +209,7 @@ stored per region.
   scan. `pageSize` (default 1000, clamped to 1..5000) sets how many rows one statement reads and `max`
   (default 10 000, clamped to 1..100000) caps the request; an unparsable value falls back to the
   default instead of failing the stream.
-- An archive that is off (`WATCH_STREAM_ARCHIVE=off`), missing its driver or locked by another process
+- An archive that is off (`WATCH_TAIL_ARCHIVE=off`), missing its driver or locked by another process
   streams a single `error` frame with code `archive-unavailable` and then `end`.
 
 `GET /api/log-groups?source=archive&region=<region>` lists what the archive holds for that region
@@ -333,8 +333,8 @@ requested region; `/api/archive?region=...` reports that file's status.
 Verified account/region mappings are cached under `identities/`, keyed by a hash of credential-source
 selectors and endpoint/region. They contain no credentials and are used only for offline reads.
 Writes re-check STS and never fall back to a cached account after an identity failure. Failed lookups
-are retried on subsequent requests. `WATCH_STREAM_ARCHIVE_DIR` overrides the root directory;
-`WATCH_STREAM_ARCHIVE_DB` / `--db` selects one explicit file instead, including legacy archives.
+are retried on subsequent requests. `WATCH_TAIL_ARCHIVE_DIR` overrides the root directory;
+`WATCH_TAIL_ARCHIVE_DB` / `--db` selects one explicit file instead, including legacy archives.
 Legacy files are not migrated because they do not contain account IDs.
 
 ## Several log groups, and the chart
@@ -376,7 +376,7 @@ single place that decides what a request is, and both the log view and the chart
 - **The log view** collapses a group into one row (id, line count, span, most critical level, and the
   worst line as a preview), opened on demand. A group with a single line renders as that line, because
   there is nothing to expand. The toggle is the log view's **By request** button, on by default and
-  stored under `watch-stream:group-requests`.
+  stored under `watch-tail:group-requests`.
 - **The chart** counts requests. The archive does it in SQL; a CloudWatch view does it in
   `bucketRequests`. Both count a line with no request id as a mark of its own
   (`coalesce(request_id, event_key)` in SQL), so nothing disappears when grouping is on. The level
@@ -420,7 +420,7 @@ smoke run (`chart tooltip has a background`), which is the only place the proper
 
 The panel and the chart are two components on purpose. `EventScatterPanel` renders the header
 (title, totals, per-level legend, brush hint) and owns a collapse toggle whose choice is stored under
-`watch-stream:chart-open`; `EventScatter` imports layerchart and draws the chart. The panel fetches the
+`watch-tail:chart-open`; `EventScatter` imports layerchart and draws the chart. The panel fetches the
 chart module with a **dynamic import** the first time it is open, so layerchart is never part of the
 first load - measured on the production build, an open panel requests ~235 KiB of chart code after the
 page has started and a collapsed one requests none. The loader is injectable (`loadChart`), which is how
@@ -487,7 +487,7 @@ run; blank values are ignored by the SDK and by `normalize()`. It also resolves 
 starting (`--region`, then the shell's `AWS_REGION`/`AWS_DEFAULT_REGION`, then the profile's `region`
 in `~/.aws/config`) because the SDK rejects an empty `AWS_REGION` string.
 
-`WATCH_STREAM_ARCHIVE` and `WATCH_STREAM_ARCHIVE_DB` are also set by the CLI (`--no-archive` and
+`WATCH_TAIL_ARCHIVE` and `WATCH_TAIL_ARCHIVE_DB` are also set by the CLI (`--no-archive` and
 `--db`), and a blank value means "unset" for both. Inside a test process (`VITEST` or
 `NODE_ENV=test`) the archive is off unless a test names a database explicitly, so a test run can never
 append to the archive of the machine it runs on.
@@ -508,11 +508,11 @@ that file with the floci endpoint and its throwaway credentials.
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | Region before the ambient profile region; unset falls through           |
 | `AWS_ENDPOINT_URL_LOGS`             | CloudWatch Logs endpoint override (checked first)                       |
 | `AWS_ENDPOINT_URL`                  | Global endpoint override; set to `http://localhost:4566` for floci      |
-| `WATCH_STREAM_REGIONS`              | Narrow the picker; unset offers every CloudWatch Logs region            |
-| `WATCH_STREAM_LIMIT`                | Default page size for `describe-log-groups`                             |
-| `WATCH_STREAM_ARCHIVE`              | `off` disables the local history archive                                |
-| `WATCH_STREAM_ARCHIVE_DIR`          | Root directory for account/region archives (default: platform data dir) |
-| `WATCH_STREAM_ARCHIVE_DB`           | Explicit file override, bypassing account/region separation             |
+| `WATCH_TAIL_REGIONS`                | Narrow the picker; unset offers every CloudWatch Logs region            |
+| `WATCH_TAIL_LIMIT`                  | Default page size for `describe-log-groups`                             |
+| `WATCH_TAIL_ARCHIVE`                | `off` disables the local history archive                                |
+| `WATCH_TAIL_ARCHIVE_DIR`            | Root directory for account/region archives (default: platform data dir) |
+| `WATCH_TAIL_ARCHIVE_DB`             | Explicit file override, bypassing account/region separation             |
 
 ## Request duration chart
 

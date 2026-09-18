@@ -314,7 +314,7 @@ async function main(): Promise<void> {
 	// Keep the history archive inside the repository during development, so
 	// `pnpm dev` and `pnpm dev:aws` never write to the data directory of whoever
 	// runs them. An explicit value in the environment still wins.
-	env.WATCH_STREAM_ARCHIVE_DIR ??= DEV_ARCHIVE_DIR;
+	env.WATCH_TAIL_ARCHIVE_DIR ??= DEV_ARCHIVE_DIR;
 
 	if (list) {
 		const names = readProfiles();

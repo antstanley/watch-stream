@@ -691,28 +691,28 @@ describe('run: the local history archive', () => {
 	it('passes the history settings to the server', async () => {
 		const plain = harness();
 		await run(['--no-open'], plain.io);
-		expect(plain.started[0]?.env.WATCH_STREAM_ARCHIVE).toBe('');
-		expect(plain.started[0]?.env.WATCH_STREAM_ARCHIVE_DB).toBe('');
+		expect(plain.started[0]?.env.WATCH_TAIL_ARCHIVE).toBe('');
+		expect(plain.started[0]?.env.WATCH_TAIL_ARCHIVE_DB).toBe('');
 
 		const custom = harness();
 		await run(['--no-open', '--db', '/tmp/mine.duckdb'], custom.io);
-		expect(custom.started[0]?.env.WATCH_STREAM_ARCHIVE_DB).toBe('/tmp/mine.duckdb');
+		expect(custom.started[0]?.env.WATCH_TAIL_ARCHIVE_DB).toBe('/tmp/mine.duckdb');
 
 		const off = harness();
 		await run(['--no-open', '--no-archive'], off.io);
-		expect(off.started[0]?.env.WATCH_STREAM_ARCHIVE).toBe('off');
+		expect(off.started[0]?.env.WATCH_TAIL_ARCHIVE).toBe('off');
 	});
 
 	it('prints the history settings with --print so a run is reproducible', async () => {
 		const h = harness();
 		expect(await run(['--print', '--db', '/tmp/mine.duckdb'], h.io)).toBe(0);
 		const text = h.out.join('\n');
-		expect(text).toContain('WATCH_STREAM_ARCHIVE_DB=/tmp/mine.duckdb');
-		expect(text).toContain('WATCH_STREAM_ARCHIVE=');
+		expect(text).toContain('WATCH_TAIL_ARCHIVE_DB=/tmp/mine.duckdb');
+		expect(text).toContain('WATCH_TAIL_ARCHIVE=');
 
 		const hm = harness();
 		await run(['--print', '--no-archive'], hm.io);
-		expect(hm.out.join('\n')).toContain('WATCH_STREAM_ARCHIVE=off');
+		expect(hm.out.join('\n')).toContain('WATCH_TAIL_ARCHIVE=off');
 	});
 });
 

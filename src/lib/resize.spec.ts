@@ -95,7 +95,7 @@ describe('units and constants', () => {
 	test('exposes the layout defaults and storage keys', () => {
 		expect(SIDEBAR_WIDTH.defaultRem).toBe(22);
 		expect(PREFIX_WIDTH.defaultRem).toBe(14);
-		expect(STORAGE_KEYS.prefixWidth).toBe('watch-stream:prefix-width');
-		expect(STORAGE_KEYS.sidebarWidth).toBe('watch-stream:sidebar-width');
+		expect(STORAGE_KEYS.prefixWidth).toBe('watch-tail:prefix-width');
+		expect(STORAGE_KEYS.sidebarWidth).toBe('watch-tail:sidebar-width');
 	});
 });
