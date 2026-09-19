@@ -91,7 +91,7 @@
 	let seriesPoints = $state<SeriesPoint[]>([]);
 	/** True while the archive counts are being fetched. */
 	let seriesLoading = $state(false);
-	let chartMetric = $state<SeriesMetric>('count');
+	let chartMetric = $state<SeriesMetric>('duration');
 	let seriesRequest = 0;
 	/** The chart's own reset handle, for clearing a brush. */
 	let scatter = $state<{ reset: () => void } | null>(null);
