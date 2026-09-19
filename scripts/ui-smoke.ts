@@ -491,6 +491,47 @@ async function main(): Promise<number> {
 				sidebarAfter > sidebarBefore,
 				`${sidebarBefore} -> ${sidebarAfter}`,
 			);
+			// Resizing metadata must not wrap the columns away from their separators.
+			const extraGroup = page.locator('input[data-testid^="group-check-"]:not(:checked)').first();
+			if (await extraGroup.count()) {
+				await extraGroup.check();
+				await page.getByTestId('log-group').first().waitFor();
+				await page.getByTestId('wrap-toggle').click();
+				await page.getByTestId('log-scroller').evaluate((element) => {
+					element.style.width = '600px';
+				});
+				await page.getByTestId('group-resizer').focus();
+				for (let step = 0; step < 32; step += 1) await page.keyboard.press('ArrowRight');
+				const geometry = await page.evaluate(() => {
+					const groupBox = document
+						.querySelector('[data-testid="log-group"]')!
+						.getBoundingClientRect();
+					const stream = document
+						.querySelector('[data-testid="log-stream"]')!
+						.getBoundingClientRect();
+					const groupHandle = document
+						.querySelector('[data-testid="group-resizer"]')!
+						.getBoundingClientRect();
+					const streamHandle = document
+						.querySelector('[data-testid="prefix-resizer"]')!
+						.getBoundingClientRect();
+					return {
+						group: Math.abs(groupBox.right - groupHandle.left - 4),
+						stream: Math.abs(stream.right - streamHandle.left - 4),
+						sameLine: Math.abs(groupBox.top - stream.top) < 2,
+					};
+				});
+				check(
+					checks,
+					'wide columns stay aligned in wrap mode',
+					geometry.group < 2 && geometry.stream < 2 && geometry.sameLine,
+					JSON.stringify(geometry),
+				);
+				await page.getByTestId('log-scroller').evaluate((element) => {
+					element.style.removeProperty('width');
+				});
+				await page.getByTestId('wrap-toggle').click();
+			}
 		}
 
 		// Historic windows: the mode toggle, the preset chips and a finite scan.

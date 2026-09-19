@@ -472,7 +472,9 @@
 	/** Rows fill the window when wrapping, and grow to their content otherwise. */
 	let listClass = $derived(wrapLines ? 'w-full' : 'w-max min-w-full');
 	/** Message cell: wrapped text or a single long line that scrolls sideways. */
-	let messageClass = $derived(wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre');
+	let messageClass = $derived(
+		wrapLines ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'whitespace-pre',
+	);
 	/** Left edge of the prefix resize handle, in pixels from the scrolled content edge. */
 	let handleLeft = $derived(
 		ROW_PADDING_PX +
@@ -483,6 +485,8 @@
 	);
 	/** Prefix column width as a CSS length. */
 	let prefixStyle = $derived(`width: ${prefixPx}px`);
+	/** Keep metadata on one flex line, reserving readable space for the wrapped message. */
+	let wrappedMinWidth = $derived(handleLeft + ROW_GAP_PX + 240 + ROW_PADDING_PX);
 
 	/** Rows the user has opened, keyed by row key. */
 	let expandedRows = $state<Record<string, boolean>>({});
@@ -738,7 +742,11 @@
 			</p>
 		{:else}
 			<!-- The handle lives inside the scrolled content so it stays on the column edge. -->
-			<div class="relative min-h-full {listClass}" data-testid="log-canvas">
+			<div
+				class="relative min-h-full {listClass}"
+				style:min-width={wrapLines ? `${wrappedMinWidth}px` : undefined}
+				data-testid="log-canvas"
+			>
 				<ol class="font-mono text-xs leading-5" data-testid="log-lines">
 					<!-- One line of the list. A line that belongs to a request is indented and
 					     marked, so an opened request reads as a nested block. -->
