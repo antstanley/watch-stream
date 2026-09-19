@@ -68,7 +68,7 @@ describe('EventScatterPanel', () => {
 	it('summarises the window and each level in the header', () => {
 		render(EventScatterPanel, { props: props() });
 		// Grouping by request is the default, so the summary counts requests.
-		expect(text('scatter-summary')).toContain('12 requests in 4 buckets');
+		expect(text('scatter-summary')).toContain('12 requests');
 		expect(text('scatter-legend-error')).toContain('Error');
 		expect(text('scatter-legend-info')).toContain('Info');
 		expect(text('scatter-hint')).toContain('drag to zoom');
@@ -179,7 +179,7 @@ describe('EventScatterPanel: what a mark stands for', () => {
 
 	it('counts lines when grouping is off', () => {
 		render(EventScatterPanel, {
-			props: { points: marks, from: 0, to: 1, bucketMs: 60_000, byRequest: false },
+			props: { points: marks, from: 0, to: 1, bucketMs: 60_000, byRequest: false, metric: 'count' },
 		});
 		expect(text('scatter-summary')).toContain('4 events');
 	});

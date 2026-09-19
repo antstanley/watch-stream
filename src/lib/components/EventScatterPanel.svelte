@@ -65,7 +65,7 @@
 	};
 
 	let {
-		metric = 'count',
+		metric = 'duration',
 		onMetricChange,
 		onSelect,
 		points = [],
@@ -162,7 +162,7 @@
 </script>
 
 <section
-	class="flex min-w-0 flex-col gap-1 rounded-lg border border-neutral-800 bg-neutral-950/60 p-2"
+	class="flex min-w-0 shrink-0 flex-col gap-1 rounded-lg border border-neutral-800 bg-neutral-950/60 p-2"
 	data-testid="event-scatter"
 	aria-label={metric === 'duration' ? 'Request duration over time' : 'Events over time'}
 >
@@ -242,41 +242,43 @@
 				appear shorter
 			</p>
 		{/if}
-		{#if chartError}
-			<p class="px-1 py-4 text-xs text-amber-300" data-testid="scatter-error">
-				The chart could not be loaded. The log view is unaffected.
-			</p>
-		{:else if hasPoints}
-			{#if Chart !== null}
-				<!-- Remounted on reset, which is what clears a brush. -->
-				{#key `${chartKey}:${metric}`}
-					<Chart
-						{points}
-						{onSelect}
-						{metric}
-						{from}
-						{to}
-						{height}
-						onBrush={(range) => {
-							brushPreview = null;
-							onBrush?.(range);
-						}}
-						onBrushPreview={(range) => (brushPreview = range)}
-					/>
-				{/key}
-			{:else}
-				<!-- Placeholder while the chunk is in flight, so the panel does not jump. -->
-				<div
-					class="w-full animate-pulse rounded bg-neutral-900/60"
-					style="height: {height}px"
-				></div>
+		<div class="overflow-hidden" style="height: {height}px" data-testid="chart-body">
+			{#if chartError}
+				<p class="px-1 py-4 text-xs text-amber-300" data-testid="scatter-error">
+					The chart could not be loaded. The log view is unaffected.
+				</p>
+			{:else if hasPoints}
+				{#if Chart !== null}
+					<!-- Remounted on reset, which is what clears a brush. -->
+					{#key `${chartKey}:${metric}`}
+						<Chart
+							{points}
+							{onSelect}
+							{metric}
+							{from}
+							{to}
+							{height}
+							onBrush={(range) => {
+								brushPreview = null;
+								onBrush?.(range);
+							}}
+							onBrushPreview={(range) => (brushPreview = range)}
+						/>
+					{/key}
+				{:else}
+					<!-- Placeholder while the chunk is in flight, so the panel does not jump. -->
+					<div
+						class="w-full animate-pulse rounded bg-neutral-900/60"
+						style="height: {height}px"
+					></div>
+				{/if}
+			{:else if !loading}
+				<p class="px-1 py-6 text-xs text-neutral-500" data-testid="scatter-empty">
+					{metric === 'duration'
+						? 'No requests with a request ID in this window yet.'
+						: 'No events in this window yet.'}
+				</p>
 			{/if}
-		{:else if !loading}
-			<p class="px-1 py-6 text-xs text-neutral-500" data-testid="scatter-empty">
-				{metric === 'duration'
-					? 'No requests with a request ID in this window yet.'
-					: 'No events in this window yet.'}
-			</p>
-		{/if}
+		</div>
 	{/if}
 </section>

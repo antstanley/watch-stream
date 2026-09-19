@@ -187,7 +187,7 @@ describe('LogViewer layout controls', () => {
 		const stream = screen.getByTestId('log-stream');
 		expect(stream.className).toContain('truncate');
 		expect(stream.getAttribute('title')).toBe(longStream);
-		expect(stream.getAttribute('style')).toContain('max-width');
+		expect(stream.getAttribute('style')).toContain('width');
 		expect(screen.getByTestId('log-message').textContent).toContain('ERROR keep this line');
 	});
 
@@ -197,7 +197,7 @@ describe('LogViewer layout controls', () => {
 		const handle = screen.getByTestId('prefix-resizer');
 		expect(handle.getAttribute('role')).toBe('separator');
 		expect(handle.getAttribute('aria-orientation')).toBe('vertical');
-		expect(handle.getAttribute('aria-label')).toBe('Resize prefix column');
+		expect(handle.getAttribute('aria-label')).toBe('Resize stream column');
 		expect(handle.getAttribute('tabindex')).toBe('0');
 		expect(Number(handle.getAttribute('aria-valuenow'))).toBe(224);
 	});
@@ -217,6 +217,23 @@ describe('LogViewer layout controls', () => {
 		await fireEvent(handle, new MouseEvent('pointermove', { clientX: 360, bubbles: true }));
 		await fireEvent(handle, new MouseEvent('pointerup', { clientX: 360, bubbles: true }));
 		expect(Number(handle.getAttribute('aria-valuenow'))).toBe(268);
+	});
+
+	it('resizes and restores timestamp and group widths, keeping the stream handle aligned', async () => {
+		const props = { lines: LINES, group: '/aws/app', groups: ['/aws/app', '/aws/other'] };
+		const view = render(LogViewer, { props });
+		await fireEvent.keyDown(screen.getByTestId('timestamp-resizer'), { key: 'ArrowRight' });
+		await fireEvent.keyDown(screen.getByTestId('group-resizer'), { key: 'ArrowRight' });
+		expect(localStorage.getItem('watch-tail:timestamp-width')).toBe('136');
+		expect(localStorage.getItem('watch-tail:group-width')).toBe('160');
+		expect(screen.getByTestId('prefix-resizer').style.left).toBe('544px');
+		expect(screen.getAllByTestId('log-group')[0]?.style.width).toBe('160px');
+		view.unmount();
+		render(LogViewer, { props });
+		await waitFor(() =>
+			expect(screen.getByTestId('timestamp-resizer').getAttribute('aria-valuenow')).toBe('136'),
+		);
+		expect(screen.getByTestId('group-resizer').getAttribute('aria-valuenow')).toBe('160');
 	});
 
 	it('persists the view preferences in localStorage', async () => {

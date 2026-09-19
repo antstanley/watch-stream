@@ -35,11 +35,11 @@ Requires **Node.js 22+**. Prefer a global install? `npm install -g watch-tail` g
   column keeps each line's source visible.
 - **Requests, not just lines.** **By request** groups matching request IDs into one expandable row,
   showing line count, elapsed span, and highest severity. Lines without an ID stay visible.
-- **Spot the spike.** In Historic mode, the chart shows request counts over time, coloured by severity.
-  Drag to zoom into an incident; severity chips filter both chart and logs. Switch off **By request**
+- **Spot the spike.** In Historic mode, the chart shows request duration over time, coloured by severity.
+  Drag to zoom into an incident; severity chips filter both chart and logs. Choose **Count** and switch off **By request**
   to count individual events. Collapse the chart when you want the space back.
 - **Readable payloads.** Syntax-coloured JSON, expandable payloads, wrapping, horizontal scrolling,
-  and resizable sidebar and stream-name columns. The viewer keeps a 5,000-line buffer.
+  and resizable sidebar, timestamp, group-name and stream-name columns (drag their edges or use arrow keys). The viewer keeps a 5,000-line buffer.
 - **Offline history.** Streamed events are saved to a local DuckDB archive. Browse them later without
   AWS credentials, or query them with SQL.
 - **Reopen the same view.** Region, groups, source, mode, and time window live in the URL. A teammate
@@ -63,7 +63,7 @@ In **Historic**, drag across the chart to narrow the window. Click the backgroun
 **Reset zoom** to restore the preset. CloudWatch charts reflect the events loaded into the viewer;
 archive charts query the whole selected window.
 
-Switch the chart from **Count** to **Duration (ms)** to see one point per request: X is its first
+The chart stays fixed above the scrolling logs and defaults to **Duration (ms)**, with one point per request: X is its first
 observed event timestamp; Y is `(last timestamp + last event duration) − first timestamp` in
 milliseconds. The last event's JSON `duration` (or `durationMs`) is used when present; otherwise it
 adds zero. Hover for the request ID and duration. Severity filters and chart zoom work in both modes.

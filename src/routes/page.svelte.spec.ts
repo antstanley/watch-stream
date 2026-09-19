@@ -328,8 +328,7 @@ describe('page: the event chart', () => {
 	it('toggles duration and count without changing the log grouping preference', async () => {
 		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
 		await renderPage();
-		expect(screen.getByTestId('chart-metric-count').getAttribute('aria-pressed')).toBe('true');
-		await fireEvent.click(screen.getByTestId('chart-metric-duration'));
+		expect(screen.getByTestId('chart-metric-duration').getAttribute('aria-pressed')).toBe('true');
 		await waitFor(() =>
 			expect(requested.some((url) => url.includes('metric=duration'))).toBe(true),
 		);
@@ -375,6 +374,21 @@ describe('page: the event chart', () => {
 		await fireEvent.click(screen.getAllByTestId('group-row')[0] as HTMLElement);
 		await waitFor(() => expect(screen.getByTestId('event-scatter')).toBeTruthy());
 		expect(requested.some((url) => url.includes('/api/series'))).toBe(false);
+	});
+});
+
+describe('page: chart defaults', () => {
+	it('selects duration and requests duration data on first visit', async () => {
+		setUrl('?region=us-east-1&group=/aws/app&source=archive&mode=historic&range=1h');
+		await renderPage();
+		expect(screen.getByTestId('chart-metric-duration').getAttribute('aria-pressed')).toBe('true');
+		await waitFor(() =>
+			expect(
+				requested.some((url) => url.includes('/api/series') && url.includes('metric=duration')),
+			).toBe(true),
+		);
+		await fireEvent.click(screen.getByTestId('chart-metric-count'));
+		expect(screen.getByTestId('chart-metric-count').getAttribute('aria-pressed')).toBe('true');
 	});
 });
 

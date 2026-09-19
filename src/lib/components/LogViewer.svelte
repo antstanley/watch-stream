@@ -18,7 +18,7 @@
 	import type { JsonToken } from '$lib/log-format';
 	import { requestRows } from '$lib/request-groups';
 	import type { RequestRow } from '$lib/request-groups';
-	import { PREFIX_WIDTH, STORAGE_KEYS, parseStoredWidth, pxToRem, remToPx } from '$lib/resize';
+	import { PREFIX_WIDTH, STORAGE_KEYS, parseStoredWidth, remToPx } from '$lib/resize';
 	import { LEVEL_LABELS } from '$lib/series-buckets';
 	import { describeWindow } from '$lib/time-range';
 	import type { LogMode } from '$lib/time-range';
@@ -116,6 +116,8 @@
 	}: Props = $props();
 
 	const TIMESTAMP_COLUMN_PX = remToPx(7.5);
+	let timestampPx = $state(TIMESTAMP_COLUMN_PX);
+	let groupPx = $state(144);
 	const ROW_PADDING_PX = remToPx(0.75);
 	const ROW_GAP_PX = remToPx(0.5);
 	const PREFIX_MIN_PX = remToPx(PREFIX_WIDTH.minRem);
@@ -148,6 +150,8 @@
 	let prefixPx = $state(PREFIX_DEFAULT_PX);
 
 	onMount(() => {
+		timestampPx = parseStoredWidth(readPref(STORAGE_KEYS.timestampWidth), 120, 64, 320);
+		groupPx = parseStoredWidth(readPref(STORAGE_KEYS.groupWidth), 144, 64, 640);
 		wrapLines = readPref(STORAGE_KEYS.wrap) === 'true';
 		jsonView = readPref(STORAGE_KEYS.jsonView) !== 'false';
 		prefixPx = parseStoredWidth(
@@ -468,11 +472,21 @@
 	/** Rows fill the window when wrapping, and grow to their content otherwise. */
 	let listClass = $derived(wrapLines ? 'w-full' : 'w-max min-w-full');
 	/** Message cell: wrapped text or a single long line that scrolls sideways. */
-	let messageClass = $derived(wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre');
+	let messageClass = $derived(
+		wrapLines ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'whitespace-pre',
+	);
 	/** Left edge of the prefix resize handle, in pixels from the scrolled content edge. */
-	let handleLeft = $derived(ROW_PADDING_PX + TIMESTAMP_COLUMN_PX + ROW_GAP_PX + prefixPx);
+	let handleLeft = $derived(
+		ROW_PADDING_PX +
+			timestampPx +
+			ROW_GAP_PX +
+			(groups.length > 1 ? groupPx + ROW_GAP_PX : 0) +
+			prefixPx,
+	);
 	/** Prefix column width as a CSS length. */
-	let prefixStyle = $derived(`max-width: ${pxToRem(prefixPx)}`);
+	let prefixStyle = $derived(`width: ${prefixPx}px`);
+	/** Keep metadata on one flex line, reserving readable space for the wrapped message. */
+	let wrappedMinWidth = $derived(handleLeft + ROW_GAP_PX + 240 + ROW_PADDING_PX);
 
 	/** Rows the user has opened, keyed by row key. */
 	let expandedRows = $state<Record<string, boolean>>({});
@@ -728,7 +742,11 @@
 			</p>
 		{:else}
 			<!-- The handle lives inside the scrolled content so it stays on the column edge. -->
-			<div class="relative min-h-full {listClass}" data-testid="log-canvas">
+			<div
+				class="relative min-h-full {listClass}"
+				style:min-width={wrapLines ? `${wrappedMinWidth}px` : undefined}
+				data-testid="log-canvas"
+			>
 				<ol class="font-mono text-xs leading-5" data-testid="log-lines">
 					<!-- One line of the list. A line that belongs to a request is indented and
 					     marked, so an opened request reads as a nested block. -->
@@ -740,9 +758,7 @@
 						<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 						<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 						<li
-							class="flex flex-wrap items-baseline gap-2 {child
-								? 'pl-8'
-								: 'px-3'} py-0.5 hover:bg-neutral-900/60 {listClass} {expandable
+							class="flex flex-wrap items-baseline gap-2 px-3 py-0.5 hover:bg-neutral-900/60 {listClass} {expandable
 								? 'cursor-pointer'
 								: ''}"
 							data-testid="log-line"
@@ -772,13 +788,18 @@
 									}
 								: undefined}
 						>
-							<span class="w-[7.5rem] shrink-0 text-neutral-500" title={row.timestamp}>
+							<span
+								class="shrink-0 truncate text-neutral-500"
+								style="width: {timestampPx}px"
+								title={row.timestamp}
+							>
 								{row.time}
 							</span>
 							{#if groups.length > 1}
 								<!-- Only worth a column when the view holds more than one group. -->
 								<span
-									class="w-[9rem] shrink-0 truncate text-teal-400/80"
+									class="shrink-0 truncate text-teal-400/80"
+									style="width: {groupPx}px"
 									title={row.group ?? ''}
 									data-testid="log-group"
 								>
@@ -845,12 +866,17 @@
 									data-testid="request-group-summary"
 									onclick={() => toggleRow(row.key)}
 								>
-									<span class="w-[7.5rem] shrink-0 text-neutral-500" title={row.timestamp}>
+									<span
+										class="shrink-0 truncate text-neutral-500"
+										style="width: {timestampPx}px"
+										title={row.timestamp}
+									>
 										{row.time}
 									</span>
 									{#if groups.length > 1}
 										<span
-											class="w-[9rem] shrink-0 truncate text-teal-400/80"
+											class="shrink-0 truncate text-teal-400/80"
+											style="width: {groupPx}px"
 											title={row.group ?? ''}
 											data-testid="log-group"
 										>
@@ -911,14 +937,38 @@
 				</ol>
 
 				<ColumnResizer
-					label="Resize prefix column"
+					label="Resize timestamp column"
+					width={timestampPx}
+					min={64}
+					max={320}
+					testId="timestamp-resizer"
+					onChange={(next) => (timestampPx = next)}
+					onCommit={(next) => writePref(STORAGE_KEYS.timestampWidth, String(next))}
+					class="absolute inset-y-0 w-2 border-r border-neutral-800/40"
+					style="left: {ROW_PADDING_PX + timestampPx - 4}px"
+				/>
+				{#if groups.length > 1}
+					<ColumnResizer
+						label="Resize log group column"
+						width={groupPx}
+						min={64}
+						max={640}
+						testId="group-resizer"
+						onChange={(next) => (groupPx = next)}
+						onCommit={(next) => writePref(STORAGE_KEYS.groupWidth, String(next))}
+						class="absolute inset-y-0 w-2 border-r border-neutral-800/40"
+						style="left: {ROW_PADDING_PX + timestampPx + ROW_GAP_PX + groupPx - 4}px"
+					/>
+				{/if}
+				<ColumnResizer
+					label="Resize stream column"
 					width={prefixPx}
 					min={PREFIX_MIN_PX}
 					max={PREFIX_MAX_PX}
 					testId="prefix-resizer"
 					onChange={(next) => (prefixPx = next)}
 					onCommit={() => savePrefixWidth()}
-					class="absolute inset-y-0 w-2"
+					class="absolute inset-y-0 w-2 border-r border-neutral-800/40"
 					style="left: {handleLeft - 4}px"
 				/>
 			</div>

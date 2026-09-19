@@ -9,6 +9,8 @@
 export const STORAGE_KEYS = {
 	sidebarWidth: 'watch-tail:sidebar-width',
 	prefixWidth: 'watch-tail:prefix-width',
+	timestampWidth: 'watch-tail:timestamp-width',
+	groupWidth: 'watch-tail:group-width',
 	wrap: 'watch-tail:wrap',
 	jsonView: 'watch-tail:json-view',
 	chartOpen: 'watch-tail:chart-open',
