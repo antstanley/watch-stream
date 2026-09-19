@@ -1,5 +1,17 @@
 # watch-tail
 
+## 0.8.0
+
+### Minor Changes
+
+- [#26](https://github.com/antstanley/watch-tail/pull/26) [`8236041`](https://github.com/antstanley/watch-tail/commit/823604159b0403d0914416d0cf7b0759596997fa) Thanks [@antstanley](https://github.com/antstanley)! - Select scatter chart points to scroll to and highlight matching log lines, expand requests, and disable auto-scroll while inspecting them. Keep request IDs scoped to their log group.
+
+### Patch Changes
+
+- [#28](https://github.com/antstanley/watch-tail/pull/28) [`76201a4`](https://github.com/antstanley/watch-tail/commit/76201a48e342163a317d1ed3ea531895a23dfa66) Thanks [@antstanley](https://github.com/antstanley)! - Fix Ctrl+C leaving the dev server running after a log stream has been opened. Preserve normal signal termination across hot reloads, and clean up the CLI child server when startup is cancelled.
+
+  Fix Ctrl+C after choosing an AWS profile: pipe server output through the CLI so a restarting child cannot restore raw terminal settings. Install shutdown handlers before displaying the Ctrl+C instruction, and test the interactive restart with real terminal input.
+
 ## 0.7.1
 
 ### Patch Changes
