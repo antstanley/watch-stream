@@ -125,7 +125,7 @@
 		padding={{ top: 8, right: 12, bottom: 24, left: metric === 'duration' ? 72 : 40 }}
 		grid={{ x: true, y: true }}
 		props={{
-			points: { r: 3, stroke: '#0a0a0a', strokeWidth: 1, fillOpacity: 0.9 },
+			points: { r: 3, stroke: 'var(--color-neutral-950)', strokeWidth: 1, fillOpacity: 0.9 },
 			// Per-axis config lives under `props`: an `axis={{ x, y }}` object is
 			// silently ignored by layerchart 2.5.
 			xAxis: { format: clockLabel, tickSpacing: 90, tickOcclusion: true },
@@ -158,9 +158,9 @@
 								cy={point.y}
 								r={point.r}
 								fill={series.color}
-								stroke="#0a0a0a"
+								stroke="var(--color-neutral-950)"
 								stroke-width="1"
-								class="cursor-pointer focus:stroke-white focus:stroke-2"
+								class="cursor-pointer focus:stroke-neutral-100 focus:stroke-2"
 								role="button"
 								tabindex="0"
 								data-testid="scatter-point"
@@ -223,6 +223,12 @@
 </div>
 
 <style>
+	/* Axis labels inherit the palette without an SVG outline obscuring small text. */
+	.w-full :global(.lc-text) {
+		fill: var(--color-neutral-400);
+		stroke: none;
+	}
+
 	.w-full :global(.lc-highlight-point),
 	.w-full :global(.lc-highlight-line) {
 		pointer-events: none;

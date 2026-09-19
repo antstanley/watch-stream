@@ -27,6 +27,9 @@ npx watch-tail --floci                                  # use a local emulator
 Requires **Node.js 22+**. Prefer a global install? `npm install -g watch-tail` gives you both
 `watch-tail` and the shorter `wt`. Press **Ctrl+C** to stop, including during a live stream or login prompt.
 
+Choose a **Theme** from the header: Midnight, Ocean, Forest and Plum are dark palettes;
+Daylight, Sand, Mint and Lavender are light palettes. The choice is remembered in this browser.
+
 ## What you get
 
 - **Live tail and historic scans.** Follow new events or select a preset (15 minutes to 5 days) or

@@ -30,11 +30,11 @@ export const LEVEL_LABELS: Record<SeriesLevel, string> = {
  * kept next to the level helpers instead of in the component.
  */
 export const SERIES_LEVEL_COLOR: Record<SeriesLevel, string> = {
-	error: '#f87171',
-	warn: '#fcd34d',
-	info: '#a3a3a3',
-	debug: '#737373',
-	unknown: '#525252',
+	error: 'var(--chart-error, #f87171)',
+	warn: 'var(--chart-warn, #fcd34d)',
+	info: 'var(--chart-info, #a3a3a3)',
+	debug: 'var(--chart-debug, #737373)',
+	unknown: 'var(--chart-unknown, #525252)',
 };
 
 /** Bucket width used when a caller does not ask for one. */

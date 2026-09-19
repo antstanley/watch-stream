@@ -1,0 +1,254 @@
+/* Palette tokens also recolour existing Tailwind utilities and their opacity variants. */
+
+:root,
+:root[data-theme='midnight'] {
+	color-scheme: dark;
+	--color-neutral-950: hsl(0 0% 5%);
+	--color-neutral-900: hsl(0 0% 10%);
+	--color-neutral-800: hsl(0 0% 20%);
+	--color-neutral-700: hsl(0 0% 30%);
+	--color-neutral-600: hsl(0 0% 52%);
+	--color-neutral-500: hsl(0 0% 60%);
+	--color-neutral-400: hsl(0 0% 69%);
+	--color-neutral-300: hsl(0 0% 79%);
+	--color-neutral-200: hsl(0 0% 87%);
+	--color-neutral-100: hsl(0 0% 94%);
+	--color-neutral-50: hsl(0 0% 98%);
+	--color-sky-950: hsl(199 75% 13%);
+	--color-sky-900: hsl(199 75% 20%);
+	--color-sky-800: hsl(199 75% 30%);
+	--color-sky-700: hsl(199 75% 39%);
+	--color-sky-600: hsl(199 75% 45%);
+	--color-sky-500: hsl(199 75% 55%);
+	--color-sky-400: hsl(199 75% 65%);
+	--color-sky-300: hsl(199 75% 76%);
+	--color-sky-200: hsl(199 75% 86%);
+	--color-sky-100: hsl(199 75% 93%);
+	--color-sky-50: hsl(199 75% 97%);
+}
+
+:root[data-theme='ocean'] {
+	color-scheme: dark;
+	--color-neutral-950: hsl(215 27% 5%);
+	--color-neutral-900: hsl(215 27% 10%);
+	--color-neutral-800: hsl(215 27% 20%);
+	--color-neutral-700: hsl(215 27% 30%);
+	--color-neutral-600: hsl(215 27% 52%);
+	--color-neutral-500: hsl(215 27% 60%);
+	--color-neutral-400: hsl(215 27% 69%);
+	--color-neutral-300: hsl(215 27% 79%);
+	--color-neutral-200: hsl(215 27% 87%);
+	--color-neutral-100: hsl(215 27% 94%);
+	--color-neutral-50: hsl(215 27% 98%);
+	--color-sky-950: hsl(190 75% 13%);
+	--color-sky-900: hsl(190 75% 20%);
+	--color-sky-800: hsl(190 75% 30%);
+	--color-sky-700: hsl(190 75% 39%);
+	--color-sky-600: hsl(190 75% 45%);
+	--color-sky-500: hsl(190 75% 55%);
+	--color-sky-400: hsl(190 75% 65%);
+	--color-sky-300: hsl(190 75% 76%);
+	--color-sky-200: hsl(190 75% 86%);
+	--color-sky-100: hsl(190 75% 93%);
+	--color-sky-50: hsl(190 75% 97%);
+}
+
+:root[data-theme='forest'] {
+	color-scheme: dark;
+	--color-neutral-950: hsl(155 18% 5%);
+	--color-neutral-900: hsl(155 18% 10%);
+	--color-neutral-800: hsl(155 18% 20%);
+	--color-neutral-700: hsl(155 18% 30%);
+	--color-neutral-600: hsl(155 18% 52%);
+	--color-neutral-500: hsl(155 18% 60%);
+	--color-neutral-400: hsl(155 18% 69%);
+	--color-neutral-300: hsl(155 18% 79%);
+	--color-neutral-200: hsl(155 18% 87%);
+	--color-neutral-100: hsl(155 18% 94%);
+	--color-neutral-50: hsl(155 18% 98%);
+	--color-sky-950: hsl(150 75% 13%);
+	--color-sky-900: hsl(150 75% 20%);
+	--color-sky-800: hsl(150 75% 30%);
+	--color-sky-700: hsl(150 75% 39%);
+	--color-sky-600: hsl(150 75% 45%);
+	--color-sky-500: hsl(150 75% 55%);
+	--color-sky-400: hsl(150 75% 65%);
+	--color-sky-300: hsl(150 75% 76%);
+	--color-sky-200: hsl(150 75% 86%);
+	--color-sky-100: hsl(150 75% 93%);
+	--color-sky-50: hsl(150 75% 97%);
+}
+
+:root[data-theme='plum'] {
+	color-scheme: dark;
+	--color-neutral-950: hsl(285 20% 5%);
+	--color-neutral-900: hsl(285 20% 10%);
+	--color-neutral-800: hsl(285 20% 20%);
+	--color-neutral-700: hsl(285 20% 30%);
+	--color-neutral-600: hsl(285 20% 52%);
+	--color-neutral-500: hsl(285 20% 60%);
+	--color-neutral-400: hsl(285 20% 69%);
+	--color-neutral-300: hsl(285 20% 79%);
+	--color-neutral-200: hsl(285 20% 87%);
+	--color-neutral-100: hsl(285 20% 94%);
+	--color-neutral-50: hsl(285 20% 98%);
+	--color-sky-950: hsl(282 75% 13%);
+	--color-sky-900: hsl(282 75% 20%);
+	--color-sky-800: hsl(282 75% 30%);
+	--color-sky-700: hsl(282 75% 39%);
+	--color-sky-600: hsl(282 75% 45%);
+	--color-sky-500: hsl(282 75% 55%);
+	--color-sky-400: hsl(282 75% 65%);
+	--color-sky-300: hsl(282 75% 76%);
+	--color-sky-200: hsl(282 75% 86%);
+	--color-sky-100: hsl(282 75% 93%);
+	--color-sky-50: hsl(282 75% 97%);
+}
+
+:root[data-theme='daylight'] {
+	color-scheme: light;
+	--color-neutral-950: hsl(215 12% 99%);
+	--color-neutral-900: hsl(215 12% 96%);
+	--color-neutral-800: hsl(215 12% 86%);
+	--color-neutral-700: hsl(215 12% 75%);
+	--color-neutral-600: hsl(215 12% 42%);
+	--color-neutral-500: hsl(215 12% 40%);
+	--color-neutral-400: hsl(215 12% 34%);
+	--color-neutral-300: hsl(215 12% 27%);
+	--color-neutral-200: hsl(215 12% 20%);
+	--color-neutral-100: hsl(215 12% 12%);
+	--color-neutral-50: hsl(215 12% 7%);
+	--color-sky-950: hsl(207 75% 94%);
+	--color-sky-900: hsl(207 75% 88%);
+	--color-sky-800: hsl(207 75% 76%);
+	--color-sky-700: hsl(207 75% 57%);
+	--color-sky-600: hsl(207 75% 39%);
+	--color-sky-500: hsl(207 75% 38%);
+	--color-sky-400: hsl(207 75% 25%);
+	--color-sky-300: hsl(207 75% 29%);
+	--color-sky-200: hsl(207 75% 25%);
+	--color-sky-100: hsl(207 75% 20%);
+	--color-sky-50: hsl(207 75% 15%);
+}
+
+:root[data-theme='sand'] {
+	color-scheme: light;
+	--color-neutral-950: hsl(35 27% 99%);
+	--color-neutral-900: hsl(35 27% 96%);
+	--color-neutral-800: hsl(35 27% 86%);
+	--color-neutral-700: hsl(35 27% 75%);
+	--color-neutral-600: hsl(35 27% 42%);
+	--color-neutral-500: hsl(35 27% 40%);
+	--color-neutral-400: hsl(35 27% 34%);
+	--color-neutral-300: hsl(35 27% 27%);
+	--color-neutral-200: hsl(35 27% 20%);
+	--color-neutral-100: hsl(35 27% 12%);
+	--color-neutral-50: hsl(35 27% 7%);
+	--color-sky-950: hsl(27 75% 94%);
+	--color-sky-900: hsl(27 75% 88%);
+	--color-sky-800: hsl(27 75% 76%);
+	--color-sky-700: hsl(27 75% 57%);
+	--color-sky-600: hsl(27 75% 39%);
+	--color-sky-500: hsl(27 75% 38%);
+	--color-sky-400: hsl(27 75% 25%);
+	--color-sky-300: hsl(27 75% 29%);
+	--color-sky-200: hsl(27 75% 25%);
+	--color-sky-100: hsl(27 75% 20%);
+	--color-sky-50: hsl(27 75% 15%);
+}
+
+:root[data-theme='mint'] {
+	color-scheme: light;
+	--color-neutral-950: hsl(155 22% 99%);
+	--color-neutral-900: hsl(155 22% 96%);
+	--color-neutral-800: hsl(155 22% 86%);
+	--color-neutral-700: hsl(155 22% 75%);
+	--color-neutral-600: hsl(155 22% 38%);
+	--color-neutral-500: hsl(155 22% 40%);
+	--color-neutral-400: hsl(155 22% 34%);
+	--color-neutral-300: hsl(155 22% 27%);
+	--color-neutral-200: hsl(155 22% 20%);
+	--color-neutral-100: hsl(155 22% 12%);
+	--color-neutral-50: hsl(155 22% 7%);
+	--color-sky-950: hsl(160 75% 94%);
+	--color-sky-900: hsl(160 75% 88%);
+	--color-sky-800: hsl(160 75% 76%);
+	--color-sky-700: hsl(160 75% 57%);
+	--color-sky-600: hsl(160 75% 39%);
+	--color-sky-500: hsl(160 75% 38%);
+	--color-sky-400: hsl(160 75% 25%);
+	--color-sky-300: hsl(160 75% 29%);
+	--color-sky-200: hsl(160 75% 25%);
+	--color-sky-100: hsl(160 75% 20%);
+	--color-sky-50: hsl(160 75% 15%);
+}
+
+:root[data-theme='lavender'] {
+	color-scheme: light;
+	--color-neutral-950: hsl(265 22% 99%);
+	--color-neutral-900: hsl(265 22% 96%);
+	--color-neutral-800: hsl(265 22% 86%);
+	--color-neutral-700: hsl(265 22% 75%);
+	--color-neutral-600: hsl(265 22% 42%);
+	--color-neutral-500: hsl(265 22% 40%);
+	--color-neutral-400: hsl(265 22% 34%);
+	--color-neutral-300: hsl(265 22% 27%);
+	--color-neutral-200: hsl(265 22% 20%);
+	--color-neutral-100: hsl(265 22% 12%);
+	--color-neutral-50: hsl(265 22% 7%);
+	--color-sky-950: hsl(265 75% 94%);
+	--color-sky-900: hsl(265 75% 88%);
+	--color-sky-800: hsl(265 75% 76%);
+	--color-sky-700: hsl(265 75% 57%);
+	--color-sky-600: hsl(265 75% 39%);
+	--color-sky-500: hsl(265 75% 38%);
+	--color-sky-400: hsl(265 75% 25%);
+	--color-sky-300: hsl(265 75% 29%);
+	--color-sky-200: hsl(265 75% 25%);
+	--color-sky-100: hsl(265 75% 20%);
+	--color-sky-50: hsl(265 75% 15%);
+}
+
+:root {
+	--color-surface-100: var(--color-neutral-950);
+	--color-surface-200: var(--color-neutral-900);
+	--color-surface-300: var(--color-neutral-800);
+	--color-surface-content: var(--color-neutral-300);
+	--color-primary: var(--color-sky-400);
+	--chart-error: var(--color-red-400);
+	--chart-warn: var(--color-amber-300);
+	--chart-info: var(--color-neutral-400);
+	--chart-debug: var(--color-neutral-500);
+	--chart-unknown: var(--color-neutral-600);
+}
+
+:root[data-theme='daylight'],
+:root[data-theme='sand'],
+:root[data-theme='mint'],
+:root[data-theme='lavender'] {
+	--color-red-300: #b91c1c;
+	--color-red-400: #b91c1c;
+	--color-red-800: #dc2626;
+	--color-red-900: #fca5a5;
+	--color-red-950: #fef2f2;
+	--color-amber-200: #78350f;
+	--color-amber-300: #92400e;
+	--color-amber-400: #92400e;
+	--color-amber-700: #b45309;
+	--color-amber-800: #d97706;
+	--color-amber-900: #fcd34d;
+	--color-amber-950: #fffbeb;
+	--color-emerald-300: #065f46;
+	--color-emerald-400: #065f46;
+	--color-emerald-900: #6ee7b7;
+	--color-emerald-950: #ecfdf5;
+	--color-teal-300: #115e59;
+	--color-teal-400: #115e59;
+	--color-teal-700: #0f766e;
+	--color-teal-900: #5eead4;
+	--color-teal-950: #f0fdfa;
+	--color-violet-300: #6d28d9;
+	--color-violet-900: #c4b5fd;
+	--color-violet-950: #f5f3ff;
+	--color-fuchsia-300: #a21caf;
+}
