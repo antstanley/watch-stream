@@ -114,6 +114,10 @@ export function readVersion(appRoot: string | null): string {
 /** Waits for SIGINT/SIGTERM, or for the server to exit on its own. */
 function waitForStop(child: ChildProcess): Promise<number> {
 	return new Promise<number>((resolveExit) => {
+		if (child.exitCode !== null || child.signalCode !== null) {
+			resolveExit(child.exitCode ?? signalExitCode(child.signalCode));
+			return;
+		}
 		let stopping = false;
 		const stop = (): void => {
 			if (stopping) {
@@ -126,10 +130,11 @@ function waitForStop(child: ChildProcess): Promise<number> {
 		};
 		process.on('SIGINT', stop);
 		process.on('SIGTERM', stop);
-		process.on('exit', () => {
-			if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+		child.once('close', (code, signal) => {
+			process.off('SIGINT', stop);
+			process.off('SIGTERM', stop);
+			resolveExit(code ?? signalExitCode(signal));
 		});
-		child.on('close', (code, signal) => resolveExit(code ?? signalExitCode(signal)));
 	});
 }
 
@@ -472,9 +477,10 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 					ui.info(
 						`profile ${assessment.chosen} already works (${shortIdentity(identity.identity.arn)}) - using it`,
 					);
+					const stopped = io.waitForStop(child);
 					ui.outro(`${url} (Ctrl+C to stop)`);
 					if (options.open) io.openBrowser(url);
-					const code = await io.waitForStop(child);
+					const code = await stopped;
 					ui.outro('stopped');
 					return code;
 				}
@@ -505,10 +511,12 @@ export async function run(argv: string[], overrides: Partial<CliIo> = {}): Promi
 			}
 		}
 
+		// Install signal handlers before advertising Ctrl+C (or opening the UI).
+		const stopped = io.waitForStop(child);
 		if (options.open) io.openBrowser(url);
 		ui.outro(`${url} (Ctrl+C to stop)`);
 
-		const code = await io.waitForStop(child);
+		const code = await stopped;
 		ui.outro('stopped');
 		return code;
 	} catch (error) {

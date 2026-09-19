@@ -44,8 +44,19 @@ type Running = {
 	exited: Promise<number>;
 };
 
-function startServer(): Running {
-	const child = spawn(process.execPath, [serverEntry], {
+function startServer(launcher: 'production' | 'dev'): Running {
+	const args =
+		launcher === 'production'
+			? [serverEntry]
+			: [
+					join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+					'--host',
+					'127.0.0.1',
+					'--port',
+					String(port),
+					'--strictPort',
+				];
+	const child = spawn(process.execPath, args, {
 		cwd: root,
 		env: {
 			...process.env,
@@ -78,41 +89,48 @@ afterEach(async () => {
 });
 
 describe.runIf(enabled)('stopping a streaming server', () => {
-	it('exits promptly when a live tail is connected', async () => {
-		const server = startServer();
-		running.push(server);
-		expect(await waitForHealth()).toBe(true);
+	it.each(['production', 'dev'] as const)(
+		'%s exits promptly when a live tail is connected',
+		async (launcher) => {
+			const server = startServer(launcher);
+			running.push(server);
+			expect(await waitForHealth()).toBe(true);
 
-		// A real live tail, kept open for the whole test: this is the connection
-		// that used to hold the shutdown for thirty seconds.
-		const controller = new AbortController();
-		const response = await fetch(
-			`${baseUrl}/api/stream?region=us-east-1&group=%2Faws%2Flambda%2Fcheckout-api`,
-			{ signal: controller.signal },
-		);
-		expect(response.status).toBe(200);
-		const reader = response.body?.getReader();
-		expect(reader).toBeDefined();
-		if (reader === undefined) return;
+			// A real live tail, kept open for the whole test: this is the connection
+			// that used to hold the shutdown for thirty seconds.
+			const controller = new AbortController();
+			const response = await fetch(
+				`${baseUrl}/api/stream?region=us-east-1&group=%2Faws%2Flambda%2Fcheckout-api`,
+				{ signal: controller.signal },
+			);
+			expect(response.status).toBe(200);
+			const reader = response.body?.getReader();
+			expect(reader).toBeDefined();
+			if (reader === undefined) return;
 
-		// The `ready` frame proves the tail is established before we stop the server.
-		const firstFrame = await reader.read();
-		expect(new TextDecoder().decode(firstFrame.value ?? new Uint8Array())).toContain(
-			'event: ready',
-		);
+			// The `ready` frame proves the tail is established before we stop the server.
+			const firstFrame = await reader.read();
+			expect(new TextDecoder().decode(firstFrame.value ?? new Uint8Array())).toContain(
+				'event: ready',
+			);
 
-		const startedAt = Date.now();
-		server.child.kill('SIGINT');
-		const code = await Promise.race([
-			server.exited,
-			new Promise<number>((resolveTimeout) => setTimeout(() => resolveTimeout(-999), 8_000)),
-		]);
-		const elapsed = Date.now() - startedAt;
+			const startedAt = Date.now();
+			server.child.kill('SIGINT');
+			const code = await Promise.race([
+				server.exited,
+				new Promise<number>((resolveTimeout) => setTimeout(() => resolveTimeout(-999), 8_000)),
+			]);
+			const elapsed = Date.now() - startedAt;
 
-		// The bound is deliberately generous: the point is "immediately", not the
-		// exact milliseconds, and the old behaviour was thirty seconds.
-		expect(elapsed).toBeLessThan(5_000);
-		expect(code).not.toBe(-999);
-		controller.abort();
-	}, 30_000);
+			// The bound is deliberately generous: the point is "immediately", not the
+			// exact milliseconds, and the old behaviour was thirty seconds.
+			expect(elapsed).toBeLessThan(5_000);
+			expect(code).not.toBe(-999);
+			controller.abort();
+			await expect(
+				fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(1000) }),
+			).rejects.toThrow(/fetch failed/);
+		},
+		30_000,
+	);
 });
