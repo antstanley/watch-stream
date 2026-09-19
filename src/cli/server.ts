@@ -91,14 +91,28 @@ export function startServer(input: StartServerInput): ChildProcess {
 		ORIGIN: uiUrl(input.host, input.port),
 		SHUTDOWN_TIMEOUT: String(SHUTDOWN_TIMEOUT_SECONDS),
 	};
-	return spawn(process.execPath, [join(input.appRoot, SERVER_ENTRY)], {
+	const child = spawn(process.execPath, [join(input.appRoot, SERVER_ENTRY)], {
 		cwd: input.appRoot,
 		env,
-		// Without --verbose the server's stdout is noise: the CLI already reports
-		// readiness. stderr stays connected so real failures are never swallowed.
-		stdio: input.verbose === true ? 'inherit' : ['ignore', 'ignore', 'inherit'],
+		// Never give the server a terminal descriptor. It starts while the CLI's
+		// spinner owns raw mode; Node snapshots inherited terminal settings and
+		// restores them on exit. A profile restart would therefore restore raw
+		// mode behind the CLI's back and stop Ctrl+C from generating SIGINT.
+		stdio: ['ignore', input.verbose === true ? 'pipe' : 'ignore', 'pipe'],
 		shell: false,
 	});
+	// Forward output without sharing ownership of the terminal. The CLI alone
+	// handles input, including in verbose mode; server errors remain visible.
+	child.stdout?.pipe(process.stdout, { end: false });
+	child.stderr?.pipe(process.stderr, { end: false });
+	// The spinner can call process.exit() directly on Ctrl+C, before readiness
+	// checks finish and before waitForStop installs its signal handlers.
+	const stopOnExit = (): void => {
+		if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+	};
+	process.once('exit', stopOnExit);
+	child.once('close', () => process.off('exit', stopOnExit));
+	return child;
 }
 
 /**

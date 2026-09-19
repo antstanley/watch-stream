@@ -69,7 +69,7 @@
 		"prepack": "pnpm build",
 		"watch-tail": "node dist/cli/bin.js",
 		"publish:check": "publint && npm pack --dry-run",
-		"test:cli": "WATCH_TAIL_E2E=1 vitest run --project integration tests/cli-server.spec.ts",
+		"test:cli": "WATCH_TAIL_E2E=1 vitest run --project integration tests/cli-server.spec.ts tests/shutdown.spec.ts tests/cli-terminal.spec.ts",
 		"changeset": "changeset",
 		"changeset:version": "changeset version && pnpm install --no-frozen-lockfile"
 	},

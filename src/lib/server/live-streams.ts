@@ -16,8 +16,26 @@
 /** Ends one open stream: writes its `end` frame and closes the connection. */
 type StreamCloser = () => void;
 
-const closers = new Set<StreamCloser>();
-let listening = false;
+// Vite reloads this module while old streams may still be open. Share the
+// registry so hot reload never installs competing signal handlers.
+const shared = globalThis as typeof globalThis & {
+	watchTailLiveStreams?: { closers: Set<StreamCloser>; listening: boolean };
+};
+const registry = (shared.watchTailLiveStreams ??= {
+	closers: new Set<StreamCloser>(),
+	listening: false,
+});
+const { closers } = registry;
+
+/** Clean up streams without swallowing Node's default signal termination. */
+function onSignal(signal: NodeJS.Signals): void {
+	closeLiveStreams();
+	if (process.listenerCount(signal) === 0) {
+		// The once-listener has already removed itself. With no server shutdown
+		// handler left, re-send the signal to restore Node's default termination.
+		process.kill(process.pid, signal);
+	}
+}
 
 /** Ends every open stream, and reports how many were open. */
 export function closeLiveStreams(): number {
@@ -43,16 +61,17 @@ export function liveStreamCount(): number {
 /**
  * Registers an open stream, and returns the function that unregisters it.
  *
- * The signal handlers are installed with the first stream and stay installed,
- * so a server that has served a tail stops promptly for the rest of its life.
+ * The signal handlers are installed with the first stream and remain until
+ * shutdown, even when all streams have already disconnected.
  */
 export function registerLiveStream(close: StreamCloser): () => void {
-	if (!listening) {
-		listening = true;
-		// Node keeps the process alive for a listener, so this is deliberately
-		// `on` rather than `once`: the same handler must work for every stream.
-		process.on('SIGINT', () => closeLiveStreams());
-		process.on('SIGTERM', () => closeLiveStreams());
+	if (!registry.listening) {
+		registry.listening = true;
+		// Run and remove our handler before framework/exit hooks inspect listener
+		// counts. In particular, signal-exit only terminates when it owns the
+		// remaining listeners; a persistent cleanup listener makes it do nothing.
+		process.prependOnceListener('SIGINT', onSignal);
+		process.prependOnceListener('SIGTERM', onSignal);
 	}
 	closers.add(close);
 	return () => {
