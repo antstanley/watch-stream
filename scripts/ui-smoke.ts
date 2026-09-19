@@ -163,12 +163,7 @@ async function main(): Promise<number> {
 
 		const group =
 			options.group ??
-			(await page
-				.locator('[data-testid="group-row"]')
-				.first()
-				.locator('span')
-				.first()
-				.textContent()) ??
+			(await page.locator('[data-testid="group-row"]').first().getAttribute('data-group-name')) ??
 			'';
 		await page.goto(pageUrl(options, group), { waitUntil: 'domcontentloaded' });
 		await page.waitForSelector('[data-testid="log-scroller"]', { timeout: options.timeout });

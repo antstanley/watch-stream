@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fitGroupName } from '$lib/group-name';
 	import { formatBytes, formatCount, formatTimestamp } from '$lib/format';
 	import { MAX_GROUP_ROWS, noArchivedGroupsMessage, noGroupsMessage } from '$lib/groups-client';
 	import type { LogGroupSummary, StreamSource } from '$lib/types';
@@ -175,13 +176,20 @@
 					<button
 						type="button"
 						data-testid="group-row"
+						data-group-name={group.name}
+						aria-label={group.name}
+						title={group.name}
 						aria-current={isSelected(group.name) ? 'true' : undefined}
 						onclick={() => onSelect?.(group.name)}
 						class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors {rowTone(
 							group.name,
 						)}"
 					>
-						<span class="truncate font-mono">{group.name}</span>
+						<span
+							class="min-w-0 flex-1 overflow-hidden whitespace-nowrap font-mono"
+							use:fitGroupName={group.name}
+							aria-hidden="true">{group.name}</span
+						>
 						{#if archived}
 							<span class="flex shrink-0 items-center gap-1.5">
 								{#if archivedCount(group) !== null}
