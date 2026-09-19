@@ -1,5 +1,17 @@
 # watch-tail
 
+## 0.9.0
+
+### Minor Changes
+
+- [#31](https://github.com/antstanley/watch-tail/pull/31) [`ad93b92`](https://github.com/antstanley/watch-tail/commit/ad93b9288313bbe17e73862fc4227ea2e435c378) Thanks [@antstanley](https://github.com/antstanley)! - Add four dark and four light colour themes with a persistent header dropdown. Apply the selected palette to controls, log highlighting and charts.
+
+- [#29](https://github.com/antstanley/watch-tail/pull/29) [`3b2f6f2`](https://github.com/antstanley/watch-tail/commit/3b2f6f26f3f7aa8ebe31406948d76c89a4de8272) Thanks [@antstanley](https://github.com/antstanley)! - Resize timestamp, group and stream columns with persisted widths. Keep the chart fixed above scrolling logs with stable height, and default to request duration.
+
+### Patch Changes
+
+- [#30](https://github.com/antstanley/watch-tail/pull/30) [`1ae43b4`](https://github.com/antstanley/watch-tail/commit/1ae43b40ebf8f8ad8e8b98cc21cb80c6885c4242) Thanks [@antstanley](https://github.com/antstanley)! - Keep trailing log-group path segments visible in narrow sidebars, collapsing prefixes with two dots and retaining the full name on hover and for assistive technology.
+
 ## 0.8.0
 
 ### Minor Changes
