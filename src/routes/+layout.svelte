@@ -1,5 +1,6 @@
 <script lang="ts">
 	import './layout.css';
+	import ThemeSelect from '$lib/components/ThemeSelect.svelte';
 	import favicon from '$lib/assets/favicon.svg';
 
 	let { children } = $props();
@@ -22,6 +23,7 @@
 			<span class="hidden text-xs text-neutral-500 sm:inline">
 				Tail CloudWatch Logs in the browser
 			</span>
+			<ThemeSelect />
 		</div>
 	</header>
 

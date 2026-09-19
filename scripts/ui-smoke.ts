@@ -542,6 +542,41 @@ async function main(): Promise<number> {
 		const backToLive = await page.getAttribute('[data-testid="mode-live"]', 'aria-pressed');
 		check(checks, 'switching back to live restarts the tail', backToLive === 'true');
 
+		// Every palette must switch without disrupting the log view or native controls.
+		const themes = ['midnight', 'ocean', 'forest', 'plum', 'daylight', 'sand', 'mint', 'lavender'];
+		check(
+			checks,
+			'eight colour themes available',
+			(await page.getByTestId('theme-select').locator('option').count()) === themes.length,
+		);
+		for (const [index, theme] of themes.entries()) {
+			await page.getByTestId('theme-select').selectOption(theme);
+			const state = await page.evaluate(() => ({
+				selected: document.documentElement.dataset.theme,
+				scheme: getComputedStyle(document.documentElement).colorScheme,
+				saved: localStorage.getItem('watch-tail:theme'),
+			}));
+			check(
+				checks,
+				`theme ${theme} applied and saved`,
+				state.selected === theme &&
+					state.saved === theme &&
+					state.scheme === (index < 4 ? 'dark' : 'light'),
+			);
+		}
+		await page.reload();
+		await page.waitForFunction(
+			() =>
+				(document.querySelector('[data-testid="theme-select"]') as HTMLSelectElement | null)
+					?.value === 'lavender',
+		);
+		check(
+			checks,
+			'theme restored after reload',
+			(await page.getByTestId('theme-select').inputValue()) === 'lavender',
+		);
+		await page.getByTestId('theme-select').selectOption('midnight');
+
 		check(checks, 'no console errors', consoleErrors.length === 0, consoleErrors.join(' | '));
 
 		if (options.screenshot !== null) {
